@@ -12,6 +12,33 @@ export class ProjectStructureCreator {
   }
 
   /**
+   * Create directories separately (for progress tracking)
+   */
+  async createDirectories(projectPath, config) {
+    const spinner = ora('Creating project directories...').start();
+    
+    try {
+      // Ensure base directory exists
+      await fs.ensureDir(projectPath);
+      
+      // Get structure for project type
+      const structure = this.getStructureForType(config);
+      
+      // Create all directories
+      for (const dir of structure.directories) {
+        const fullPath = path.join(projectPath, dir);
+        await fs.ensureDir(fullPath);
+      }
+      
+      spinner.succeed('Project directories created');
+      return true;
+    } catch (error) {
+      spinner.fail('Failed to create directories');
+      throw error;
+    }
+  }
+
+  /**
    * Define project structures for different types
    */
   defineStructures() {

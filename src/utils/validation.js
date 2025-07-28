@@ -197,3 +197,142 @@ export function validateTemplateVariables(variables) {
   const { error } = variableSchema.validate(variables);
   return !error;
 }
+
+// SECURITY: Additional API token validation functions
+export function validateApiToken(token, type = 'generic') {
+  if (!token || typeof token !== 'string') {
+    return false;
+  }
+  
+  // Length validation (tokens should be reasonably long)
+  if (token.length < 8 || token.length > 256) {
+    return false;
+  }
+  
+  // Check for obvious test tokens
+  const testTokens = ['test', 'example', 'demo', 'placeholder', '123456'];
+  if (testTokens.some(test => token.toLowerCase().includes(test))) {
+    return false;
+  }
+  
+  // Type-specific validation
+  switch (type) {
+    case 'cloudflare':
+      // Cloudflare tokens are typically 40 characters
+      return token.length >= 30 && /^[A-Za-z0-9_-]+$/.test(token);
+    case 'airtable':
+      // Airtable keys start with 'key' or 'pat'
+      return (token.startsWith('key') || token.startsWith('pat')) && token.length >= 17;
+    default:
+      // Generic token validation
+      return /^[A-Za-z0-9_-]+$/.test(token);
+  }
+}
+
+// SECURITY: Sanitize error messages to prevent information disclosure
+export function sanitizeErrorMessage(message) {
+  if (!message || typeof message !== 'string') {
+    return 'An error occurred';
+  }
+  
+  // Remove potential sensitive data patterns
+  const sensitivePatterns = [
+    /Bearer\s+[A-Za-z0-9\-_]+/gi,  // Bearer tokens
+    /api[_-]?key[s]?[:\s=]+[A-Za-z0-9\-_]+/gi,  // API keys
+    /token[s]?[:\s=]+[A-Za-z0-9\-_]+/gi,  // Generic tokens
+    /password[s]?[:\s=]+\S+/gi,  // Passwords
+    /secret[s]?[:\s=]+\S+/gi,  // Secrets
+    /[A-Za-z0-9]{32,}/g  // Long hex strings (potential keys)
+  ];
+  
+  let sanitized = message;
+  sensitivePatterns.forEach(pattern => {
+    sanitized = sanitized.replace(pattern, '[REDACTED]');
+  });
+  
+  // Generic network errors
+  if (sanitized.includes('ENOTFOUND') || sanitized.includes('ECONNREFUSED')) {
+    return 'Network connection error';
+  }
+  
+  if (sanitized.includes('timeout') || sanitized.includes('ETIMEDOUT')) {
+    return 'Request timeout';
+  }
+  
+  if (sanitized.includes('401') || sanitized.includes('403')) {
+    return 'Authentication failed';
+  }
+  
+  return sanitized.substring(0, 100); // Limit message length
+}
+
+// SECURITY: Rate limiting helper for API calls
+export class RateLimiter {
+  constructor(maxRequests = 10, windowMs = 60000) {
+    this.requests = new Map();
+    this.maxRequests = maxRequests;
+    this.windowMs = windowMs;
+  }
+  
+  isRateLimited(identifier) {
+    const now = Date.now();
+    const requestLog = this.requests.get(identifier) || [];
+    
+    // Clean old requests outside the window
+    const recentRequests = requestLog.filter(time => now - time < this.windowMs);
+    
+    if (recentRequests.length >= this.maxRequests) {
+      return true;
+    }
+    
+    // Add current request
+    recentRequests.push(now);
+    this.requests.set(identifier, recentRequests);
+    
+    return false;
+  }
+  
+  getRemainingRequests(identifier) {
+    const now = Date.now();
+    const requestLog = this.requests.get(identifier) || [];
+    const recentRequests = requestLog.filter(time => now - time < this.windowMs);
+    
+    return Math.max(0, this.maxRequests - recentRequests.length);
+  }
+}
+
+// SECURITY: Input sanitization with comprehensive checks
+export function sanitizeUserInput(input, options = {}) {
+  const {
+    maxLength = 1000,
+    allowHTML = false,
+    allowNewlines = true,
+    stripControlChars = true
+  } = options;
+  
+  if (!input || typeof input !== 'string') {
+    return '';
+  }
+  
+  let sanitized = input;
+  
+  // Limit length to prevent DoS
+  sanitized = sanitized.substring(0, maxLength);
+  
+  // Remove null bytes and other control characters
+  if (stripControlChars) {
+    sanitized = sanitized.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  }
+  
+  // Remove newlines if not allowed
+  if (!allowNewlines) {
+    sanitized = sanitized.replace(/[\n\r]/g, ' ');
+  }
+  
+  // Basic XSS prevention if not allowing HTML
+  if (!allowHTML) {
+    sanitized = sanitized.replace(/[<>]/g, '');
+  }
+  
+  return sanitized.trim();
+}

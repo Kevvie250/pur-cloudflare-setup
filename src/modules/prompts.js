@@ -103,7 +103,16 @@ export class PromptManager {
             message: 'Use shared PurAir API proxy worker?',
             default: existingConfig.useSharedWorker !== false,
             when: () => {
-              console.log(chalk.yellow('\n💡 Recommended: Use the shared worker for all PurAir projects'));
+              console.log(boxen(
+                chalk.yellow('💡 Recommendation') + '\n' +
+                chalk.white('Use the shared worker for all PurAir projects\n') +
+                chalk.gray('This provides centralized API management'),
+                {
+                  padding: 1,
+                  borderStyle: 'round',
+                  borderColor: 'yellow'
+                }
+              ));
               return true;
             }
           },
@@ -112,7 +121,7 @@ export class PromptManager {
             name: 'useWorkers',
             message: 'Use Cloudflare Workers?',
             default: existingConfig.useWorkers !== false,
-            when: (answers) => !answers.useSharedWorker
+            when: (answers) => !answers.useSharedWorker && advancedMode
           },
           {
             type: 'list',
@@ -131,14 +140,14 @@ export class PromptManager {
             name: 'useKV',
             message: 'Include KV storage?',
             default: existingConfig.useKV || false,
-            when: (answers) => !answers.useSharedWorker
+            when: (answers) => !answers.useSharedWorker && advancedMode
           },
           {
             type: 'confirm',
             name: 'useDurableObjects',
             message: 'Include Durable Objects?',
             default: existingConfig.useDurableObjects || false,
-            when: (answers) => !answers.useSharedWorker
+            when: (answers) => !answers.useSharedWorker && advancedMode
           }
         );
         break;
@@ -265,15 +274,49 @@ export class PromptManager {
     ]);
   }
 
-  async selectFromList(message, choices) {
+  async selectFromList(message, choices, allowMultiple = false) {
     const { selection } = await inquirer.prompt([
       {
-        type: 'list',
+        type: allowMultiple ? 'checkbox' : 'list',
         name: 'selection',
         message,
-        choices
+        choices,
+        pageSize: 15
       }
     ]);
     return selection;
+  }
+
+  async confirmWithDetails(message, details) {
+    console.log(boxen(
+      details,
+      {
+        padding: 1,
+        borderStyle: 'round',
+        borderColor: 'yellow'
+      }
+    ));
+    
+    const confirmed = await this.confirmAction(message);
+    return { proceed: confirmed };
+  }
+
+  displayFeatureInfo(feature) {
+    const featureDescriptions = {
+      'error-pages': 'Custom 404, 500, and other error pages',
+      'redirects': 'URL redirects and path rewrites',
+      'headers': 'Custom HTTP headers for responses',
+      'env-vars': 'Environment variable management',
+      'rate-limiting': 'API rate limiting per client',
+      'cors': 'Cross-Origin Resource Sharing settings',
+      'analytics': 'Cloudflare Analytics integration',
+      'ssl': 'SSL/TLS certificate configuration',
+      'cache': 'Cache control and purging rules',
+      'security-headers': 'Security headers (CSP, HSTS, etc.)'
+    };
+    
+    if (featureDescriptions[feature]) {
+      console.log(chalk.gray(`  ℹ️  ${featureDescriptions[feature]}\n`));
+    }
   }
 }

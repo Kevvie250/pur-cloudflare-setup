@@ -14,6 +14,53 @@ export class TemplateEngine {
   }
 
   /**
+   * Get all templates needed for a project
+   */
+  async getTemplatesForProject(config) {
+    const templates = [];
+    const structure = this.getProjectStructure(config);
+    
+    for (const file of structure.files) {
+      const templatePath = path.join(this.templatesDir, file.template);
+      const outputPath = file.path;
+      
+      if (await fs.pathExists(templatePath)) {
+        const content = await this.processTemplate(file.template, config);
+        templates.push({
+          template: file.template,
+          output: outputPath,
+          content
+        });
+      }
+    }
+    
+    return templates;
+  }
+
+  /**
+   * Get project structure based on config
+   */
+  getProjectStructure(config) {
+    // This would normally come from projectStructureCreator
+    // Adding basic structure for compatibility
+    const baseFiles = [
+      { template: 'config/package.json.template', path: 'package.json' },
+      { template: 'config/.env.example.template', path: '.env.example' },
+      { template: 'config/.gitignore.template', path: '.gitignore' },
+      { template: 'docs/README.md.template', path: 'README.md' }
+    ];
+
+    if (config.projectType === 'api') {
+      baseFiles.push(
+        { template: 'api/index.js.template', path: 'src/index.js' },
+        { template: 'cloudflare/wrangler.toml.template', path: 'wrangler.toml' }
+      );
+    }
+
+    return { files: baseFiles };
+  }
+
+  /**
    * Context-aware escaping functions
    */
   escapeForContext(value, context) {
