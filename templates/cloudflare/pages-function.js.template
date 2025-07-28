@@ -1,0 +1,513 @@
+/**
+ * Cloudflare Pages Function - {{projectName}}
+ * 
+ * This function handles API requests for Cloudflare Pages deployments.
+ * Place this file in /functions/api/[[path]].js for catch-all routing
+ * 
+ * Environment variables are configured in the Cloudflare Pages dashboard
+ */
+
+export async function onRequest(context) {
+  const {
+    request,
+    env,
+    params,
+    waitUntil,
+    next,
+    data
+  } = context;
+
+  const url = new URL(request.url);
+  
+  // Extract the API path from the catch-all parameter
+  const apiPath = params.path ? params.path.join('/') : '';
+  
+  // Health check endpoint
+  if (apiPath === 'health' || apiPath === '') {
+    return new Response(JSON.stringify({ 
+      status: 'healthy',
+      service: '{{projectName}}',
+      environment: env.ENVIRONMENT || 'production',
+      timestamp: new Date().toISOString()
+    }), {
+      headers: { 
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache'
+      }
+    });
+  }
+
+  // Handle CORS preflight requests
+  if (request.method === 'OPTIONS') {
+    return handleCORS(request, env);
+  }
+
+  // Get origin for CORS handling
+  const origin = request.headers.get('Origin');
+  
+  // Verify origin
+  if (origin && !isAllowedOrigin(origin, env)) {
+    console.error('Origin check failed:', { 
+      origin, 
+      allowedOrigins: env.ALLOWED_ORIGINS,
+      path: apiPath 
+    });
+    return new Response('Forbidden - Invalid origin', { 
+      status: 403,
+      headers: {
+        'Content-Type': 'text/plain'
+      }
+    });
+  }
+
+  // Route to appropriate handler
+  {{#if (eq apiType "airtable")}}
+  if (apiPath.startsWith('airtable/')) {
+    return handleAirtableRequest(request, env, apiPath.replace('airtable/', ''), origin);
+  }
+  {{/if}}
+  
+  {{#if (eq apiType "custom")}}
+  // Custom API routing
+  const response = await handleCustomAPI(request, env, apiPath);
+  return addCORSHeaders(response, origin, env);
+  {{/if}}
+
+  {{#if enableWebhooks}}
+  // Webhook endpoints
+  if (apiPath.startsWith('webhooks/')) {
+    return handleWebhook(request, env, apiPath.replace('webhooks/', ''));
+  }
+  {{/if}}
+
+  // 404 for unmatched routes
+  return new Response('Not Found', { 
+    status: 404,
+    headers: {
+      'Content-Type': 'text/plain'
+    }
+  });
+}
+
+/**
+ * Handle CORS preflight requests
+ */
+function handleCORS(request, env) {
+  const origin = request.headers.get('Origin');
+  const headers = {
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Max-Age': '86400',
+  };
+
+  if (origin && isAllowedOrigin(origin, env)) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Allow-Credentials'] = 'true';
+  }
+
+  return new Response(null, { status: 204, headers });
+}
+
+/**
+ * Check if origin is allowed
+ */
+function isAllowedOrigin(origin, env) {
+  if (!env.ALLOWED_ORIGINS) {
+    // Default to allowing localhost in development
+    if (env.ENVIRONMENT === 'development') {
+      return origin.includes('localhost') || origin.includes('127.0.0.1');
+    }
+    return false;
+  }
+  
+  const allowedOrigins = env.ALLOWED_ORIGINS.split(',').map(o => o.trim());
+  
+  // Check for exact match
+  if (allowedOrigins.includes(origin)) return true;
+  
+  // Check for wildcard patterns
+  for (const allowed of allowedOrigins) {
+    if (allowed.includes('*')) {
+      const pattern = allowed.replace(/\*/g, '.*');
+      const regex = new RegExp(`^${pattern}$`);
+      if (regex.test(origin)) return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Add CORS headers to response
+ */
+function addCORSHeaders(response, origin, env) {
+  const headers = new Headers(response.headers);
+  
+  if (origin && isAllowedOrigin(origin, env)) {
+    headers.set('Access-Control-Allow-Origin', origin);
+    headers.set('Access-Control-Allow-Credentials', 'true');
+  }
+  
+  // Always set these headers
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('X-Frame-Options', 'DENY');
+  
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
+{{#if (eq apiType "airtable")}}
+/**
+ * Handle Airtable API requests
+ */
+async function handleAirtableRequest(request, env, apiPath, origin) {
+  // Validate the request path
+  if (!apiPath || apiPath.includes('..')) {
+    return new Response('Invalid API path', { status: 400 });
+  }
+
+  // Build Airtable API URL
+  const url = new URL(request.url);
+  const airtableUrl = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${apiPath}${url.search}`;
+  
+  // Log request details (excluding sensitive data)
+  console.log('Airtable request:', {
+    method: request.method,
+    path: apiPath,
+    hasToken: !!env.AIRTABLE_TOKEN,
+    environment: env.ENVIRONMENT
+  });
+  
+  // Prepare headers for Airtable request
+  const headers = new Headers({
+    'Authorization': `Bearer ${env.AIRTABLE_TOKEN}`,
+    'Content-Type': 'application/json',
+  });
+
+  // Forward the request to Airtable
+  try {
+    const airtableResponse = await fetch(airtableUrl, {
+      method: request.method,
+      headers: headers,
+      body: request.method !== 'GET' && request.method !== 'HEAD' 
+        ? await request.text() 
+        : undefined,
+    });
+
+    // Create response with Airtable data
+    const responseBody = await airtableResponse.text();
+    const response = new Response(responseBody, {
+      status: airtableResponse.status,
+      statusText: airtableResponse.statusText,
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      }
+    });
+
+    // Add CORS headers and return
+    return addCORSHeaders(response, origin, env);
+  } catch (error) {
+    console.error('Airtable request failed:', error);
+    return new Response(JSON.stringify({ 
+      error: 'Failed to fetch data',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    }), {
+      status: 500,
+      headers: { 
+        'Content-Type': 'application/json'
+      }
+    });
+  }
+}
+{{/if}}
+
+{{#if (eq apiType "custom")}}
+/**
+ * Handle custom API requests
+ */
+async function handleCustomAPI(request, env, apiPath) {
+  // Example: Route to different handlers based on path
+  switch (true) {
+    case apiPath.startsWith('users/'):
+      return handleUsersAPI(request, env, apiPath);
+    case apiPath.startsWith('data/'):
+      return handleDataAPI(request, env, apiPath);
+    {{#if enableDatabase}}
+    case apiPath.startsWith('db/'):
+      return handleDatabaseAPI(request, env, apiPath);
+    {{/if}}
+    default:
+      return new Response(JSON.stringify({
+        error: 'API endpoint not found',
+        path: apiPath
+      }), { 
+        status: 404,
+        headers: { 'Content-Type': 'application/json' }
+      });
+  }
+}
+
+/**
+ * Example handler for users API
+ */
+async function handleUsersAPI(request, env, path) {
+  // Implement your custom users API logic here
+  const method = request.method;
+  const userId = path.split('/')[1];
+  
+  switch (method) {
+    case 'GET':
+      // Fetch user(s)
+      if (userId) {
+        return new Response(JSON.stringify({ 
+          id: userId,
+          name: 'Sample User',
+          email: 'user@example.com'
+        }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      // List users
+      return new Response(JSON.stringify({ 
+        users: [],
+        total: 0 
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+    case 'POST':
+      // Create user
+      const data = await request.json();
+      return new Response(JSON.stringify({ 
+        id: 'new-user-id',
+        ...data 
+      }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+    default:
+      return new Response('Method not allowed', { status: 405 });
+  }
+}
+
+/**
+ * Example handler for data API
+ */
+async function handleDataAPI(request, env, path) {
+  // Implement your custom data API logic here
+  return new Response(JSON.stringify({ 
+    message: 'Data API endpoint',
+    path: path,
+    method: request.method
+  }), {
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+{{#if enableDatabase}}
+/**
+ * Handle database operations (D1, KV, or Durable Objects)
+ */
+async function handleDatabaseAPI(request, env, path) {
+  // Example using D1
+  if (env.DB) {
+    try {
+      const query = new URL(request.url).searchParams;
+      const table = path.split('/')[1];
+      
+      switch (request.method) {
+        case 'GET':
+          const results = await env.DB.prepare(
+            `SELECT * FROM ${table} LIMIT ?`
+          ).bind(100).all();
+          
+          return new Response(JSON.stringify(results), {
+            headers: { 'Content-Type': 'application/json' }
+          });
+          
+        case 'POST':
+          const data = await request.json();
+          // Insert logic here
+          return new Response(JSON.stringify({ success: true }), {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' }
+          });
+          
+        default:
+          return new Response('Method not allowed', { status: 405 });
+      }
+    } catch (error) {
+      console.error('Database error:', error);
+      return new Response(JSON.stringify({ 
+        error: 'Database operation failed',
+        message: error.message 
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  }
+  
+  return new Response('Database not configured', { status: 501 });
+}
+{{/if}}
+{{/if}}
+
+{{#if enableWebhooks}}
+/**
+ * Handle webhook requests
+ */
+async function handleWebhook(request, env, webhookPath) {
+  // Verify webhook signature if configured
+  {{#if webhookSecret}}
+  const signature = request.headers.get('X-Webhook-Signature');
+  const payload = await request.text();
+  
+  if (!verifyWebhookSignature(payload, signature, env.WEBHOOK_SECRET)) {
+    return new Response('Invalid signature', { status: 401 });
+  }
+  {{else}}
+  const payload = await request.text();
+  {{/if}}
+  
+  try {
+    // Log webhook received
+    console.log('Webhook received:', {
+      path: webhookPath,
+      method: request.method,
+      headers: Object.fromEntries(request.headers.entries())
+    });
+    
+    // Parse payload
+    const data = JSON.parse(payload);
+    
+    // Process based on webhook type
+    switch (webhookPath) {
+      case 'github':
+        // Handle GitHub webhooks
+        return handleGitHubWebhook(data, env);
+        
+      case 'stripe':
+        // Handle Stripe webhooks
+        return handleStripeWebhook(data, env);
+        
+      default:
+        // Generic webhook processing
+        console.log('Generic webhook:', { path: webhookPath, data });
+        return new Response('Webhook processed', { status: 200 });
+    }
+  } catch (error) {
+    console.error('Webhook processing failed:', error);
+    return new Response('Webhook processing failed', { status: 500 });
+  }
+}
+
+{{#if webhookSecret}}
+/**
+ * Verify webhook signature
+ */
+async function verifyWebhookSignature(payload, signature, secret) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(payload);
+  const key = encoder.encode(secret);
+  
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    key,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  
+  const signatureBuffer = await crypto.subtle.sign('HMAC', cryptoKey, data);
+  const computedSignature = btoa(String.fromCharCode(...new Uint8Array(signatureBuffer)));
+  
+  return computedSignature === signature;
+}
+{{/if}}
+
+/**
+ * Example: Handle GitHub webhooks
+ */
+async function handleGitHubWebhook(data, env) {
+  const event = data.action;
+  console.log('GitHub webhook:', { event, repository: data.repository?.name });
+  
+  // Process based on event type
+  // Add your GitHub webhook logic here
+  
+  return new Response('GitHub webhook processed', { status: 200 });
+}
+
+/**
+ * Example: Handle Stripe webhooks
+ */
+async function handleStripeWebhook(data, env) {
+  const event = data.type;
+  console.log('Stripe webhook:', { event, id: data.id });
+  
+  // Process based on event type
+  // Add your Stripe webhook logic here
+  
+  return new Response('Stripe webhook processed', { status: 200 });
+}
+{{/if}}
+
+{{#if enableAnalytics}}
+/**
+ * Track analytics event using Cloudflare Analytics Engine
+ */
+function trackEvent(env, eventName, properties = {}) {
+  if (env.ANALYTICS) {
+    env.ANALYTICS.writeDataPoint({
+      blobs: [eventName, properties.category || 'general'],
+      doubles: [Date.now(), properties.value || 1],
+      indexes: [properties.userId || 'anonymous']
+    });
+  }
+}
+{{/if}}
+
+{{#if enableCache}}
+/**
+ * Cache response with Cloudflare Cache API
+ */
+async function cacheResponse(request, response, ttl = 3600) {
+  const cache = caches.default;
+  const cacheKey = new Request(request.url, request);
+  
+  // Clone response before caching
+  const responseToCache = response.clone();
+  
+  // Set cache headers
+  const headers = new Headers(responseToCache.headers);
+  headers.set('Cache-Control', `public, max-age=${ttl}`);
+  
+  const cachedResponse = new Response(responseToCache.body, {
+    status: responseToCache.status,
+    statusText: responseToCache.statusText,
+    headers
+  });
+  
+  // Store in cache
+  await cache.put(cacheKey, cachedResponse);
+  
+  return response;
+}
+
+/**
+ * Get cached response
+ */
+async function getCachedResponse(request) {
+  const cache = caches.default;
+  const cacheKey = new Request(request.url, request);
+  
+  return await cache.match(cacheKey);
+}
+{{/if}}

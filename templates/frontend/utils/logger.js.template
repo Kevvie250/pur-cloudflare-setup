@@ -1,0 +1,272 @@
+/**
+ * Logger Utility - {{projectName}}
+ * 
+ * Provides consistent logging with different levels and formatting.
+ * Respects debug mode and environment settings.
+ */
+
+export class Logger {
+  constructor(options = {}) {
+    this.name = options.name || '{{projectName}}';
+    this.enabled = options.enabled !== false;
+    this.level = options.level || this.getDefaultLevel();
+    this.enableTimestamp = options.timestamp !== false;
+    this.enableColors = options.colors !== false && this.supportsColors();
+    
+    // Log levels
+    this.levels = {
+      debug: 0,
+      info: 1,
+      warn: 2,
+      error: 3,
+      none: 4
+    };
+    
+    // Colors for each level
+    this.colors = {
+      debug: '\x1b[36m', // Cyan
+      info: '\x1b[32m',  // Green
+      warn: '\x1b[33m',  // Yellow
+      error: '\x1b[31m', // Red
+      reset: '\x1b[0m'   // Reset
+    };
+  }
+
+  /**
+   * Get default log level based on environment
+   */
+  getDefaultLevel() {
+    if (typeof window !== 'undefined') {
+      // Browser environment
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('debug') === 'true') return 'debug';
+      
+      return import.meta.env?.MODE === 'development' ? 'debug' : 'info';
+    }
+    
+    // Node environment
+    return process.env.LOG_LEVEL || (process.env.NODE_ENV === 'development' ? 'debug' : 'info');
+  }
+
+  /**
+   * Check if environment supports colors
+   */
+  supportsColors() {
+    if (typeof window !== 'undefined') {
+      // Browser console supports colors via CSS
+      return true;
+    }
+    
+    // Node.js - check if terminal supports colors
+    return process.stdout.isTTY && process.env.TERM !== 'dumb';
+  }
+
+  /**
+   * Format log message
+   */
+  format(level, message, ...args) {
+    const parts = [];
+    
+    // Timestamp
+    if (this.enableTimestamp) {
+      parts.push(`[${new Date().toISOString()}]`);
+    }
+    
+    // Logger name
+    parts.push(`[${this.name}]`);
+    
+    // Level
+    parts.push(`[${level.toUpperCase()}]`);
+    
+    // Message
+    parts.push(message);
+    
+    return [parts.join(' '), ...args];
+  }
+
+  /**
+   * Log with specific level
+   */
+  log(level, message, ...args) {
+    if (!this.enabled) return;
+    
+    const levelValue = this.levels[level];
+    const currentLevelValue = this.levels[this.level];
+    
+    if (levelValue < currentLevelValue) return;
+    
+    const [formattedMessage, ...formattedArgs] = this.format(level, message, ...args);
+    
+    if (typeof window !== 'undefined') {
+      // Browser logging with CSS colors
+      if (this.enableColors) {
+        const color = this.getConsoleColor(level);
+        console[level](`%c${formattedMessage}`, `color: ${color}`, ...formattedArgs);
+      } else {
+        console[level](formattedMessage, ...formattedArgs);
+      }
+    } else {
+      // Node.js logging with ANSI colors
+      if (this.enableColors) {
+        const color = this.colors[level] || this.colors.reset;
+        console[level](`${color}${formattedMessage}${this.colors.reset}`, ...formattedArgs);
+      } else {
+        console[level](formattedMessage, ...formattedArgs);
+      }
+    }
+  }
+
+  /**
+   * Get CSS color for browser console
+   */
+  getConsoleColor(level) {
+    const colorMap = {
+      debug: '#00bcd4',
+      info: '#4caf50',
+      warn: '#ff9800',
+      error: '#f44336'
+    };
+    
+    return colorMap[level] || '#000000';
+  }
+
+  /**
+   * Debug level logging
+   */
+  debug(message, ...args) {
+    this.log('debug', message, ...args);
+  }
+
+  /**
+   * Info level logging
+   */
+  info(message, ...args) {
+    this.log('info', message, ...args);
+  }
+
+  /**
+   * Warning level logging
+   */
+  warn(message, ...args) {
+    this.log('warn', message, ...args);
+  }
+
+  /**
+   * Error level logging
+   */
+  error(message, ...args) {
+    this.log('error', message, ...args);
+  }
+
+  /**
+   * Log a group of related messages
+   */
+  group(label, fn) {
+    if (!this.enabled) return;
+    
+    if (console.group) {
+      console.group(label);
+      try {
+        fn();
+      } finally {
+        console.groupEnd();
+      }
+    } else {
+      this.info(`--- ${label} ---`);
+      fn();
+      this.info(`--- End ${label} ---`);
+    }
+  }
+
+  /**
+   * Log a table of data
+   */
+  table(data, columns) {
+    if (!this.enabled) return;
+    
+    if (console.table) {
+      console.table(data, columns);
+    } else {
+      this.info('Table:', JSON.stringify(data, null, 2));
+    }
+  }
+
+  /**
+   * Time a function execution
+   */
+  async time(label, fn) {
+    if (!this.enabled) return fn();
+    
+    const start = performance.now();
+    
+    try {
+      const result = await fn();
+      const duration = performance.now() - start;
+      this.debug(`${label} took ${duration.toFixed(2)}ms`);
+      return result;
+    } catch (error) {
+      const duration = performance.now() - start;
+      this.error(`${label} failed after ${duration.toFixed(2)}ms`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Create a child logger with a new name
+   */
+  child(name) {
+    return new Logger({
+      name: `${this.name}:${name}`,
+      enabled: this.enabled,
+      level: this.level,
+      timestamp: this.enableTimestamp,
+      colors: this.enableColors
+    });
+  }
+
+  /**
+   * Set log level
+   */
+  setLevel(level) {
+    if (this.levels[level] !== undefined) {
+      this.level = level;
+    } else {
+      this.warn(`Invalid log level: ${level}`);
+    }
+  }
+
+  /**
+   * Enable/disable logging
+   */
+  setEnabled(enabled) {
+    this.enabled = enabled;
+  }
+
+  /**
+   * Log memory usage (Node.js only)
+   */
+  memory() {
+    if (!this.enabled) return;
+    
+    if (typeof process !== 'undefined' && process.memoryUsage) {
+      const usage = process.memoryUsage();
+      const format = (bytes) => (bytes / 1024 / 1024).toFixed(2) + ' MB';
+      
+      this.debug('Memory Usage:', {
+        rss: format(usage.rss),
+        heapTotal: format(usage.heapTotal),
+        heapUsed: format(usage.heapUsed),
+        external: format(usage.external)
+      });
+    }
+  }
+}
+
+// Create default logger instance
+export const logger = new Logger({
+  name: '{{projectName}}',
+  level: {{#if debugMode}}'debug'{{else}}'info'{{/if}}
+});
+
+// Export convenience methods
+export const { debug, info, warn, error } = logger;

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  
+  <!-- Basic Meta Tags -->
+  <title>{{projectName}}{{#if pageTitle}} - {{pageTitle}}{{/if}}</title>
+  <meta name="description" content="{{projectDescription}}">
+  <meta name="keywords" content="{{join keywords ', '}}">
+  <meta name="author" content="{{author}}">
+  
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="{{#if customDomain}}https://{{domain}}/{{/if}}">
+  <meta property="og:title" content="{{projectName}}">
+  <meta property="og:description" content="{{projectDescription}}">
+  {{#if ogImage}}
+  <meta property="og:image" content="{{ogImage}}">
+  {{/if}}
+  
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="{{#if customDomain}}https://{{domain}}/{{/if}}">
+  <meta property="twitter:title" content="{{projectName}}">
+  <meta property="twitter:description" content="{{projectDescription}}">
+  {{#if twitterImage}}
+  <meta property="twitter:image" content="{{twitterImage}}">
+  {{/if}}
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  
+  {{#if enablePWA}}
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="{{themeColor}}">
+  {{/if}}
+  
+  <!-- Preconnect to external domains -->
+  {{#if (eq apiType "airtable")}}
+  <link rel="preconnect" href="https://api.airtable.com">
+  {{/if}}
+  {{#if useGoogleFonts}}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  {{/if}}
+  
+  <!-- Fonts -->
+  {{#if useGoogleFonts}}
+  <link href="https://fonts.googleapis.com/css2?family={{googleFontFamily}}:wght@{{googleFontWeights}}&display=swap" rel="stylesheet">
+  {{/if}}
+  
+  <!-- Styles -->
+  {{#if useTailwind}}
+  <link rel="stylesheet" href="/src/styles/tailwind.css">
+  {{else}}
+  <link rel="stylesheet" href="/src/styles/main.css">
+  {{/if}}
+  {{#if (eq frameworkType "vanilla")}}
+  <link rel="stylesheet" href="/src/styles/unified-design-system.css">
+  {{/if}}
+  
+  {{#if customStyles}}
+  <!-- Custom Styles -->
+  {{#each customStyles}}
+  <link rel="stylesheet" href="{{this}}">
+  {{/each}}
+  {{/if}}
+  
+  <!-- Analytics -->
+  {{#if enableAnalytics}}
+  {{#if useGoogleAnalytics}}
+  <!-- Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id={{gaTrackingId}}"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', '{{gaTrackingId}}');
+  </script>
+  {{/if}}
+  {{#if usePlausible}}
+  <!-- Plausible Analytics -->
+  <script defer data-domain="{{domain}}" src="https://plausible.io/js/plausible.js"></script>
+  {{/if}}
+  {{/if}}
+  
+  <!-- Critical CSS (optional) -->
+  {{#if criticalCSS}}
+  <style>
+    {{criticalCSS}}
+  </style>
+  {{/if}}
+</head>
+<body>
+  <!-- Loading State -->
+  <div id="app-loader" class="app-loader">
+    <div class="loader-spinner"></div>
+    <p>Loading {{projectName}}...</p>
+  </div>
+  
+  <!-- App Root -->
+  <div id="app" class="app-container" style="display: none;">
+    {{#if (eq frameworkType "vanilla")}}
+    <!-- Header -->
+    <header class="app-header">
+      <nav class="navbar">
+        <div class="navbar-brand">
+          <h1>{{projectName}}</h1>
+        </div>
+        <div class="navbar-menu">
+          <a href="#dashboard" class="nav-link active">Dashboard</a>
+          {{#each navigationLinks}}
+          <a href="{{this.href}}" class="nav-link">{{this.label}}</a>
+          {{/each}}
+        </div>
+        {{#if enableUserMenu}}
+        <div class="navbar-end">
+          <div class="user-menu">
+            <button class="user-menu-toggle" aria-label="User menu">
+              <span class="user-avatar"></span>
+            </button>
+          </div>
+        </div>
+        {{/if}}
+      </nav>
+    </header>
+    
+    <!-- Main Content -->
+    <main class="app-main">
+      <div class="container">
+        <!-- Page Header -->
+        <div class="page-header">
+          <h2 class="page-title">Dashboard</h2>
+          {{#if enableFilters}}
+          <div class="page-actions">
+            <button class="btn btn-primary" id="refreshData">
+              <span class="icon-refresh"></span> Refresh
+            </button>
+            {{#if enableExport}}
+            <button class="btn btn-secondary" id="exportData">
+              <span class="icon-download"></span> Export
+            </button>
+            {{/if}}
+          </div>
+          {{/if}}
+        </div>
+        
+        {{#if enableFilters}}
+        <!-- Filters Section -->
+        <div class="filters-section">
+          <div class="filters-row">
+            {{#each filters}}
+            <div class="filter-group">
+              <label for="filter-{{this.id}}">{{this.label}}</label>
+              {{#if (eq this.type "select")}}
+              <select id="filter-{{this.id}}" class="form-control">
+                <option value="">All {{this.label}}</option>
+                {{#each this.options}}
+                <option value="{{this.value}}">{{this.label}}</option>
+                {{/each}}
+              </select>
+              {{/if}}
+              {{#if (eq this.type "date")}}
+              <input type="date" id="filter-{{this.id}}" class="form-control">
+              {{/if}}
+              {{#if (eq this.type "search")}}
+              <input type="search" id="filter-{{this.id}}" class="form-control" placeholder="Search {{this.label}}...">
+              {{/if}}
+            </div>
+            {{/each}}
+          </div>
+        </div>
+        {{/if}}
+        
+        <!-- Content Area -->
+        <div class="content-area">
+          {{#if enableStats}}
+          <!-- Stats Cards -->
+          <div class="stats-grid">
+            {{#each statsCards}}
+            <div class="stat-card">
+              <div class="stat-icon">
+                <span class="icon-{{this.icon}}"></span>
+              </div>
+              <div class="stat-content">
+                <h3 class="stat-value" data-stat="{{this.id}}">--</h3>
+                <p class="stat-label">{{this.label}}</p>
+              </div>
+            </div>
+            {{/each}}
+          </div>
+          {{/if}}
+          
+          {{#if enableCharts}}
+          <!-- Charts Section -->
+          <div class="charts-section">
+            <div class="chart-container">
+              <canvas id="mainChart"></canvas>
+            </div>
+          </div>
+          {{/if}}
+          
+          {{#if enableDataTable}}
+          <!-- Data Table -->
+          <div class="table-section">
+            <div class="table-container">
+              <table class="data-table" id="mainTable">
+                <thead>
+                  <tr>
+                    {{#each tableColumns}}
+                    <th class="{{this.class}}">{{this.label}}</th>
+                    {{/each}}
+                  </tr>
+                </thead>
+                <tbody>
+                  <!-- Table rows will be populated by JavaScript -->
+                </tbody>
+              </table>
+            </div>
+            {{#if enablePagination}}
+            <div class="table-pagination">
+              <button class="btn btn-sm" id="prevPage" disabled>Previous</button>
+              <span class="pagination-info">Page <span id="currentPage">1</span> of <span id="totalPages">1</span></span>
+              <button class="btn btn-sm" id="nextPage">Next</button>
+            </div>
+            {{/if}}
+          </div>
+          {{/if}}
+        </div>
+      </div>
+    </main>
+    
+    <!-- Footer -->
+    <footer class="app-footer">
+      <div class="container">
+        <p>&copy; {{currentYear}} {{projectName}}. All rights reserved.</p>
+      </div>
+    </footer>
+    {{/if}}
+  </div>
+  
+  <!-- Modals -->
+  {{#if enableModals}}
+  <div id="modal-container"></div>
+  {{/if}}
+  
+  <!-- Toast Notifications -->
+  {{#if enableToasts}}
+  <div id="toast-container" class="toast-container"></div>
+  {{/if}}
+  
+  <!-- No Script Message -->
+  <noscript>
+    <div class="no-script-message">
+      <h2>JavaScript Required</h2>
+      <p>This application requires JavaScript to be enabled. Please enable JavaScript in your browser settings and reload the page.</p>
+    </div>
+  </noscript>
+  
+  <!-- Scripts -->
+  {{#if (eq frameworkType "vanilla")}}
+  <script type="module" src="/src/js/main.js"></script>
+  {{/if}}
+  {{#if (eq frameworkType "react")}}
+  <script type="module" src="/src/main.jsx"></script>
+  {{/if}}
+  {{#if (eq frameworkType "vue")}}
+  <script type="module" src="/src/main.js"></script>
+  {{/if}}
+  {{#if (eq frameworkType "svelte")}}
+  <script type="module" src="/src/main.js"></script>
+  {{/if}}
+  {{#if (eq frameworkType "preact")}}
+  <script type="module" src="/src/main.jsx"></script>
+  {{/if}}
+  
+  {{#if customScripts}}
+  <!-- Custom Scripts -->
+  {{#each customScripts}}
+  <script {{#if this.type}}type="{{this.type}}"{{/if}} {{#if this.async}}async{{/if}} {{#if this.defer}}defer{{/if}} src="{{this.src}}"></script>
+  {{/each}}
+  {{/if}}
+  
+  <!-- Service Worker -->
+  {{#if enablePWA}}
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then(registration => console.log('SW registered:', registration))
+          .catch(error => console.log('SW registration failed:', error));
+      });
+    }
+  </script>
+  {{/if}}
+</body>
+</html>

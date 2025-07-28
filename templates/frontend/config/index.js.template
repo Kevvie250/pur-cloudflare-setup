@@ -1,0 +1,259 @@
+/**
+ * Application Configuration - {{projectName}}
+ * 
+ * Centralized configuration management.
+ * Merges environment variables with default values.
+ */
+
+// Environment detection
+const isDevelopment = import.meta.env?.MODE === 'development' || process.env.NODE_ENV === 'development';
+const isProduction = import.meta.env?.MODE === 'production' || process.env.NODE_ENV === 'production';
+
+// Get environment variable with fallback
+const getEnv = (key, defaultValue = '') => {
+  if (typeof window !== 'undefined') {
+    // Browser environment - Vite injects env vars
+    return import.meta.env?.[key] || defaultValue;
+  }
+  // Node environment
+  return process.env[key] || defaultValue;
+};
+
+// Application configuration
+export const config = {
+  // Application info
+  app: {
+    name: '{{projectName}}',
+    version: getEnv('VITE_APP_VERSION', '1.0.0'),
+    description: '{{projectDescription}}',
+    environment: getEnv('VITE_ENVIRONMENT', isDevelopment ? 'development' : 'production')
+  },
+
+  // API configuration
+  api: {
+    baseUrl: getEnv('VITE_API_URL', '{{#if workerDevUrl}}{{workerDevUrl}}{{else}}/api{{/if}}'),
+    timeout: parseInt(getEnv('VITE_API_TIMEOUT', '{{apiTimeout}}'), 10),
+    retries: parseInt(getEnv('VITE_API_RETRIES', '3'), 10),
+    retryDelay: parseInt(getEnv('VITE_API_RETRY_DELAY', '1000'), 10)
+  },
+
+  {{#if (eq apiType "airtable")}}
+  // Airtable configuration
+  airtable: {
+    baseId: getEnv('VITE_AIRTABLE_BASE_ID', ''),
+    tables: {
+      {{#each airtableTables}}
+      {{this.key}}: '{{this.name}}',
+      {{/each}}
+    },
+    views: {
+      {{#each airtableViews}}
+      {{this.key}}: '{{this.name}}',
+      {{/each}}
+    }
+  },
+  {{/if}}
+
+  {{#if enableAuth}}
+  // Authentication configuration
+  auth: {
+    enabled: true,
+    provider: '{{authProvider}}',
+    {{#if (eq authProvider "auth0")}}
+    domain: getEnv('VITE_AUTH0_DOMAIN', ''),
+    clientId: getEnv('VITE_AUTH0_CLIENT_ID', ''),
+    redirectUri: getEnv('VITE_AUTH0_REDIRECT_URI', window.location.origin + '/auth/callback'),
+    {{/if}}
+    {{#if (eq authProvider "clerk")}}
+    publishableKey: getEnv('VITE_CLERK_PUBLISHABLE_KEY', ''),
+    {{/if}}
+    {{#if (eq authProvider "supabase")}}
+    url: getEnv('VITE_SUPABASE_URL', ''),
+    anonKey: getEnv('VITE_SUPABASE_ANON_KEY', ''),
+    {{/if}}
+    tokenKey: '{{projectName}}_auth_token',
+    refreshTokenKey: '{{projectName}}_refresh_token',
+    userKey: '{{projectName}}_user'
+  },
+  {{/if}}
+
+  // UI configuration
+  ui: {
+    {{#if enablePagination}}
+    pagination: {
+      defaultPageSize: {{defaultPageSize}},
+      pageSizeOptions: [10, 25, 50, 100],
+      showSizeChanger: true
+    },
+    {{/if}}
+    {{#if enableToasts}}
+    toasts: {
+      duration: {{toastDuration}},
+      position: '{{toastPosition}}',
+      maxToasts: 5
+    },
+    {{/if}}
+    {{#if enableCharts}}
+    charts: {
+      defaultType: '{{defaultChartType}}',
+      theme: {
+        primaryColor: '{{themeColor}}',
+        backgroundColor: '{{chartBackgroundColor}}',
+        borderColor: '{{chartBorderColor}}'
+      }
+    },
+    {{/if}}
+    dateFormat: 'YYYY-MM-DD',
+    timeFormat: 'HH:mm:ss',
+    dateTimeFormat: 'YYYY-MM-DD HH:mm:ss'
+  },
+
+  // Feature flags
+  features: {
+    {{#each featureFlags}}
+    {{this.name}}: getEnv('VITE_FEATURE_{{uppercase this.name}}', '{{this.enabled}}') === 'true',
+    {{/each}}
+    debug: getEnv('VITE_DEBUG', String(isDevelopment)) === 'true'
+  },
+
+  // Cache configuration
+  cache: {
+    enabled: {{#if enableCache}}true{{else}}false{{/if}},
+    ttl: parseInt(getEnv('VITE_CACHE_TTL', '300000'), 10), // 5 minutes
+    maxSize: parseInt(getEnv('VITE_CACHE_MAX_SIZE', '100'), 10),
+    storage: getEnv('VITE_CACHE_STORAGE', 'memory') // memory | localStorage | sessionStorage
+  },
+
+  {{#if enableAnalytics}}
+  // Analytics configuration
+  analytics: {
+    enabled: getEnv('VITE_ANALYTICS_ENABLED', String(!isDevelopment)) === 'true',
+    {{#if useGoogleAnalytics}}
+    provider: 'google',
+    trackingId: getEnv('VITE_GA_TRACKING_ID', '{{gaTrackingId}}'),
+    {{/if}}
+    {{#if usePlausible}}
+    provider: 'plausible',
+    domain: getEnv('VITE_PLAUSIBLE_DOMAIN', '{{domain}}'),
+    apiKey: getEnv('VITE_PLAUSIBLE_API_KEY', ''),
+    {{/if}}
+    {{#if usePostHog}}
+    provider: 'posthog',
+    apiKey: getEnv('VITE_POSTHOG_API_KEY', ''),
+    host: getEnv('VITE_POSTHOG_HOST', 'https://app.posthog.com'),
+    {{/if}}
+    trackErrors: true,
+    trackPerformance: true
+  },
+  {{/if}}
+
+  // Development configuration
+  dev: {
+    isDevelopment,
+    isProduction,
+    port: parseInt(getEnv('VITE_PORT', '{{devServerPort}}'), 10),
+    host: getEnv('VITE_HOST', 'localhost'),
+    https: getEnv('VITE_HTTPS', 'false') === 'true',
+    open: getEnv('VITE_OPEN', 'true') === 'true'
+  },
+
+  // Build configuration
+  build: {
+    sourceMaps: getEnv('VITE_SOURCE_MAPS', '{{#if sourceMaps}}true{{else}}false{{/if}}') === 'true',
+    analyze: getEnv('VITE_ANALYZE', 'false') === 'true',
+    minify: getEnv('VITE_MINIFY', String(isProduction)) === 'true'
+  },
+
+  // Storage keys
+  storage: {
+    prefix: '{{projectName}}_',
+    keys: {
+      theme: 'theme',
+      preferences: 'preferences',
+      filters: 'filters',
+      sort: 'sort',
+      pageSize: 'pageSize'
+    }
+  },
+
+  // External services
+  services: {
+    {{#if enableEmailService}}
+    email: {
+      provider: '{{emailProvider}}',
+      from: getEnv('VITE_EMAIL_FROM', 'noreply@{{domain}}')
+    },
+    {{/if}}
+    {{#if enablePayments}}
+    payments: {
+      provider: '{{paymentProvider}}',
+      currency: getEnv('VITE_CURRENCY', 'USD'),
+      {{#if (eq paymentProvider "stripe")}}
+      publishableKey: getEnv('VITE_STRIPE_PUBLISHABLE_KEY', ''),
+      {{/if}}
+    },
+    {{/if}}
+  },
+
+  // Custom configuration
+  custom: {
+    {{#each customConfig}}
+    {{this.key}}: getEnv('VITE_{{uppercase this.key}}', '{{this.value}}'),
+    {{/each}}
+  }
+};
+
+// Validate required configuration
+export function validateConfig() {
+  const errors = [];
+
+  {{#if (eq apiType "airtable")}}
+  // Airtable validation
+  if (!config.airtable.baseId && config.app.environment === 'production') {
+    errors.push('AIRTABLE_BASE_ID is required');
+  }
+  {{/if}}
+
+  {{#if enableAuth}}
+  // Auth validation
+  {{#if (eq authProvider "auth0")}}
+  if (!config.auth.domain || !config.auth.clientId) {
+    errors.push('Auth0 configuration is incomplete');
+  }
+  {{/if}}
+  {{#if (eq authProvider "clerk")}}
+  if (!config.auth.publishableKey) {
+    errors.push('Clerk publishable key is required');
+  }
+  {{/if}}
+  {{/if}}
+
+  if (errors.length > 0) {
+    console.error('Configuration errors:', errors);
+    if (config.app.environment === 'production') {
+      throw new Error('Invalid configuration: ' + errors.join(', '));
+    }
+  }
+
+  return errors.length === 0;
+}
+
+// Get storage key with prefix
+export function getStorageKey(key) {
+  return config.storage.prefix + (config.storage.keys[key] || key);
+}
+
+// Get feature flag
+export function isFeatureEnabled(feature) {
+  return config.features[feature] === true;
+}
+
+// Get API endpoint
+export function getApiEndpoint(path) {
+  const baseUrl = config.api.baseUrl.replace(/\/$/, '');
+  const cleanPath = path.replace(/^\//, '');
+  return `${baseUrl}/${cleanPath}`;
+}
+
+// Export as default
+export default config;

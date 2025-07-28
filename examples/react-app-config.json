@@ -1,0 +1,15 @@
+{
+  "projectName": "purair-dashboard",
+  "domain": "dashboard.purair.com",
+  "projectType": "app",
+  "features": [
+    "error-pages",
+    "env-vars",
+    "headers",
+    "redirects"
+  ],
+  "environment": "production",
+  "useWrangler": true,
+  "framework": "react",
+  "usePages": true
+}

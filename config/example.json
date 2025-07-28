@@ -1,0 +1,15 @@
+{
+  "projectName": "example-site",
+  "domain": "example.com",
+  "projectType": "site",
+  "features": [
+    "error-pages",
+    "redirects",
+    "headers",
+    "env-vars"
+  ],
+  "environment": "development",
+  "useWrangler": true,
+  "usePages": true,
+  "buildStep": false
+}

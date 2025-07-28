@@ -1,0 +1,14 @@
+{
+  "projectName": "purair-landing",
+  "domain": "www.purair.com",
+  "projectType": "site",
+  "features": [
+    "error-pages",
+    "redirects",
+    "headers"
+  ],
+  "environment": "production",
+  "useWrangler": true,
+  "usePages": true,
+  "buildStep": false
+}

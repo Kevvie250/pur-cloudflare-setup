@@ -1,0 +1,238 @@
+{
+  "name": "{{projectName}}",
+  "version": "1.0.0",
+  "description": "{{projectDescription}}",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    {{#if enableCloudflareWorker}}
+    "worker:dev": "wrangler dev",
+    "worker:deploy": "wrangler deploy",
+    "worker:tail": "wrangler tail",
+    {{/if}}
+    {{#if enableCloudflarePages}}
+    "pages:dev": "wrangler pages dev ./dist",
+    "pages:deploy": "wrangler pages deploy ./dist",
+    {{/if}}
+    {{#if enableTests}}
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage",
+    {{/if}}
+    {{#if enableLinting}}
+    "lint": "eslint src --ext .js,.jsx,.ts,.tsx",
+    "lint:fix": "eslint src --ext .js,.jsx,.ts,.tsx --fix",
+    {{/if}}
+    {{#if enableFormatting}}
+    "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,css,scss,json,md}\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx,ts,tsx,css,scss,json,md}\"",
+    {{/if}}
+    "clean": "rm -rf dist node_modules",
+    "clean:dist": "rm -rf dist",
+    {{#if enableTypeCheck}}
+    "typecheck": "tsc --noEmit",
+    {{/if}}
+    {{#if customScripts}}
+    {{#each customScripts}}
+    "{{this.name}}": "{{this.command}}",
+    {{/each}}
+    {{/if}}
+    "deploy": "npm run build && npm run {{#if enableCloudflareWorker}}worker:deploy{{else}}pages:deploy{{/if}}",
+    "start": "npm run dev"
+  },
+  "dependencies": {
+    {{#if (eq frameworkType "react")}}
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    {{#if useReactRouter}}
+    "react-router-dom": "^6.22.0",
+    {{/if}}
+    {{/if}}
+    {{#if (eq frameworkType "vue")}}
+    "vue": "^3.4.0",
+    {{#if useVueRouter}}
+    "vue-router": "^4.2.0",
+    {{/if}}
+    {{#if usePinia}}
+    "pinia": "^2.1.0",
+    {{/if}}
+    {{/if}}
+    {{#if (eq frameworkType "svelte")}}
+    "svelte": "^4.2.0",
+    {{#if useSvelteKit}}
+    "@sveltejs/kit": "^2.0.0",
+    {{/if}}
+    {{/if}}
+    {{#if (eq frameworkType "preact")}}
+    "preact": "^10.19.0",
+    {{#if usePreactRouter}}
+    "preact-router": "^4.1.0",
+    {{/if}}
+    {{/if}}
+    {{#if useAxios}}
+    "axios": "^1.6.0",
+    {{/if}}
+    {{#if useChartLibrary}}
+    "chart.js": "^4.4.0",
+    {{/if}}
+    {{#if useDataTables}}
+    "ag-grid-community": "^31.0.0",
+    {{/if}}
+    {{#if useDateLibrary}}
+    "date-fns": "^3.0.0",
+    {{/if}}
+    {{#if useFormLibrary}}
+    {{#if (eq frameworkType "react")}}
+    "react-hook-form": "^7.48.0",
+    {{/if}}
+    {{#if (eq frameworkType "vue")}}
+    "vee-validate": "^4.12.0",
+    {{/if}}
+    {{/if}}
+    {{#if useStateManagement}}
+    {{#if (eq frameworkType "react")}}
+    "zustand": "^4.4.0",
+    {{/if}}
+    {{#if (eq frameworkType "vue")}}
+    "pinia": "^2.1.0",
+    {{/if}}
+    {{/if}}
+    {{#each additionalDependencies}}
+    "{{this.name}}": "{{this.version}}",
+    {{/each}}
+    "clsx": "^2.1.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0",
+    {{#if enableCloudflareWorker}}
+    "wrangler": "^3.0.0",
+    {{/if}}
+    {{#if (eq frameworkType "react")}}
+    "@vitejs/plugin-react": "^4.2.0",
+    {{#if useTypeScript}}
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    {{/if}}
+    {{/if}}
+    {{#if (eq frameworkType "vue")}}
+    "@vitejs/plugin-vue": "^5.0.0",
+    {{#if useTypeScript}}
+    "vue-tsc": "^1.8.0",
+    {{/if}}
+    {{/if}}
+    {{#if (eq frameworkType "svelte")}}
+    "@sveltejs/vite-plugin-svelte": "^3.0.0",
+    {{#if useTypeScript}}
+    "svelte-check": "^3.6.0",
+    "tslib": "^2.6.0",
+    {{/if}}
+    {{/if}}
+    {{#if (eq frameworkType "preact")}}
+    "@preact/preset-vite": "^2.8.0",
+    {{#if useTypeScript}}
+    "@types/preact": "^10.0.0",
+    {{/if}}
+    {{/if}}
+    {{#if useTypeScript}}
+    "typescript": "^5.3.0",
+    {{/if}}
+    {{#if enableLinting}}
+    "eslint": "^8.56.0",
+    {{#if (eq frameworkType "react")}}
+    "eslint-plugin-react": "^7.33.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    {{/if}}
+    {{#if (eq frameworkType "vue")}}
+    "eslint-plugin-vue": "^9.20.0",
+    {{/if}}
+    {{#if useTypeScript}}
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    {{/if}}
+    {{/if}}
+    {{#if enableFormatting}}
+    "prettier": "^3.2.0",
+    {{/if}}
+    {{#if enableTests}}
+    "vitest": "^1.2.0",
+    "@vitest/ui": "^1.2.0",
+    {{#if (eq frameworkType "react")}}
+    "@testing-library/react": "^14.1.0",
+    "@testing-library/jest-dom": "^6.2.0",
+    {{/if}}
+    {{#if (eq frameworkType "vue")}}
+    "@testing-library/vue": "^8.0.0",
+    {{/if}}
+    "jsdom": "^24.0.0",
+    {{/if}}
+    {{#if useSass}}
+    "sass": "^1.70.0",
+    {{/if}}
+    {{#if useLess}}
+    "less": "^4.2.0",
+    {{/if}}
+    {{#if enablePostCSS}}
+    "postcss": "^8.4.0",
+    "autoprefixer": "^10.4.0",
+    {{/if}}
+    {{#if useTailwind}}
+    "tailwindcss": "^3.4.0",
+    {{/if}}
+    {{#if enablePWA}}
+    "vite-plugin-pwa": "^0.17.0",
+    {{/if}}
+    {{#each additionalDevDependencies}}
+    "{{this.name}}": "{{this.version}}",
+    {{/each}}
+    "@cloudflare/workers-types": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    {{#each keywords}}
+    "{{this}}"{{#unless @last}},{{/unless}}
+    {{/each}}
+  ],
+  "author": "{{author}}",
+  "license": "{{license}}",
+  {{#if repository}}
+  "repository": {
+    "type": "git",
+    "url": "{{repository}}"
+  },
+  {{/if}}
+  {{#if homepage}}
+  "homepage": "{{homepage}}",
+  {{/if}}
+  {{#if bugs}}
+  "bugs": {
+    "url": "{{bugs}}"
+  },
+  {{/if}}
+  "browserslist": [
+    "> 1%",
+    "last 2 versions",
+    "not dead"
+  ],
+  {{#if enableHusky}}
+  "husky": {
+    "hooks": {
+      "pre-commit": "npm run lint && npm run format:check",
+      "pre-push": "npm run test"
+    }
+  },
+  {{/if}}
+  {{#if workspaces}}
+  "workspaces": [
+    {{#each workspaces}}
+    "{{this}}"{{#unless @last}},{{/unless}}
+    {{/each}}
+  ],
+  {{/if}}
+  "volta": {
+    "node": "20.11.0"
+  }
+}

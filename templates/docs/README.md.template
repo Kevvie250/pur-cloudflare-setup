@@ -1,0 +1,317 @@
+# {{projectName}}
+
+{{projectDescription}}
+
+## 🚀 Quick Start
+
+1. **Install dependencies**
+   ```bash
+   npm install
+   ```
+
+2. **Set up environment variables**
+   ```bash
+   cp .env.example .env
+   ```
+   
+   Edit `.env` and add your credentials:
+   {{#if (eq apiType "airtable")}}
+   - `AIRTABLE_TOKEN` - Your Airtable Personal Access Token
+   - `AIRTABLE_BASE_ID` - Your Airtable Base ID
+   {{/if}}
+   {{#if cloudflareAccountId}}
+   - `CLOUDFLARE_ACCOUNT_ID` - Your Cloudflare Account ID
+   - `CLOUDFLARE_API_TOKEN` - Your Cloudflare API Token
+   {{/if}}
+
+3. **Start development server**
+   ```bash
+   npm run dev
+   ```
+
+{{#if enableCloudflareWorker}}
+4. **Deploy to Cloudflare**
+   ```bash
+   wrangler login
+   npm run worker:deploy
+   ```
+{{/if}}
+
+## 📁 Project Structure
+
+```
+{{projectName}}/
+{{#if (eq projectType "fullstack")}}
+├── worker/               # Cloudflare Worker backend
+│   ├── src/
+│   │   └── index.js     # Worker entry point
+│   └── wrangler.toml    # Worker configuration
+├── frontend/            # Frontend application
+│   ├── src/
+│   │   ├── js/         # JavaScript files
+│   │   └── styles/     # CSS files
+│   ├── index.html      # Main HTML file
+│   └── vite.config.js  # Vite configuration
+{{else}}
+├── src/                 # Source code
+│   ├── js/             # JavaScript files
+│   │   ├── services/   # API and data services
+│   │   ├── managers/   # UI managers
+│   │   └── utils/      # Utility functions
+│   └── styles/         # CSS files
+├── public/             # Static assets
+├── index.html          # Main HTML file
+{{#if enableCloudflareWorker}}
+├── wrangler.toml       # Cloudflare Worker config
+{{/if}}
+├── vite.config.js      # Vite configuration
+{{/if}}
+├── package.json        # Dependencies and scripts
+└── .env.example        # Environment variables template
+```
+
+## 📜 Available Scripts
+
+- `npm run dev` - Start development server
+- `npm run build` - Build for production
+- `npm run preview` - Preview production build
+{{#if enableCloudflareWorker}}
+- `npm run worker:dev` - Start Worker development server
+- `npm run worker:deploy` - Deploy Worker to Cloudflare
+- `npm run worker:tail` - Stream Worker logs
+{{/if}}
+{{#if enableTests}}
+- `npm test` - Run tests
+- `npm run test:coverage` - Run tests with coverage
+{{/if}}
+{{#if enableLinting}}
+- `npm run lint` - Lint code
+- `npm run lint:fix` - Fix linting issues
+{{/if}}
+
+## 🔧 Configuration
+
+### Environment Variables
+
+{{#if (eq apiType "airtable")}}
+#### Airtable Configuration
+- `AIRTABLE_TOKEN` - Personal Access Token from Airtable
+- `AIRTABLE_BASE_ID` - Base ID (found in Airtable API docs)
+{{/if}}
+
+{{#if enableCloudflareWorker}}
+#### Cloudflare Configuration
+- `CLOUDFLARE_ACCOUNT_ID` - Your account ID
+- `CLOUDFLARE_API_TOKEN` - API token with Worker permissions
+{{/if}}
+
+#### Application Configuration
+- `NODE_ENV` - Environment (development/production)
+- `ALLOWED_ORIGINS` - CORS allowed origins (comma-separated)
+{{#each envVars}}
+- `{{this.key}}` - {{this.description}}
+{{/each}}
+
+{{#if enableCloudflareWorker}}
+### Cloudflare Worker Configuration
+
+The Worker is configured in `wrangler.toml`:
+
+```toml
+name = "{{workerName}}"
+main = "src/index.js"
+compatibility_date = "{{compatibilityDate}}"
+
+[env.production]
+{{#if customDomain}}
+routes = [
+  { pattern = "{{domain}}/api/*", zone_name = "{{zoneName}}" }
+]
+{{else}}
+workers_dev = true
+{{/if}}
+```
+
+### Secrets Management
+
+Sensitive values should be set as secrets:
+
+```bash
+wrangler secret put AIRTABLE_TOKEN
+{{#each secrets}}
+wrangler secret put {{this.name}}
+{{/each}}
+```
+{{/if}}
+
+## 🌟 Features
+
+{{#if enableFilters}}
+- ✅ Advanced filtering and search
+{{/if}}
+{{#if enableCharts}}
+- 📊 Interactive charts and visualizations
+{{/if}}
+{{#if enableDataTable}}
+- 📋 Data tables with sorting and pagination
+{{/if}}
+{{#if enableExport}}
+- 📥 Export data to CSV/Excel
+{{/if}}
+{{#if enableAuth}}
+- 🔐 Authentication and authorization
+{{/if}}
+{{#if enablePWA}}
+- 📱 Progressive Web App support
+{{/if}}
+{{#if enableCache}}
+- ⚡ Intelligent caching for performance
+{{/if}}
+
+## 🚀 Deployment
+
+### Deploy to Cloudflare Pages
+
+1. Build the project:
+   ```bash
+   npm run build
+   ```
+
+2. Deploy using Wrangler:
+   ```bash
+   npx wrangler pages deploy dist
+   ```
+
+{{#if enableCloudflareWorker}}
+### Deploy Worker
+
+1. Configure your `wrangler.toml` with your account details
+2. Set secrets:
+   ```bash
+   wrangler secret put AIRTABLE_TOKEN
+   ```
+3. Deploy:
+   ```bash
+   npm run worker:deploy
+   ```
+{{/if}}
+
+### Custom Domain
+
+{{#if customDomain}}
+1. Add your domain to Cloudflare
+2. Update the `routes` in `wrangler.toml`
+3. Deploy and verify DNS settings
+{{else}}
+To use a custom domain:
+
+1. Add your domain to Cloudflare
+2. Update `wrangler.toml` with your domain:
+   ```toml
+   routes = [
+     { pattern = "yourdomain.com/*", zone_name = "yourdomain.com" }
+   ]
+   ```
+3. Deploy the Worker/Pages project
+{{/if}}
+
+## 🛠️ Development
+
+### API Integration
+
+{{#if (eq apiType "airtable")}}
+The application connects to Airtable through a Cloudflare Worker proxy. This keeps your API credentials secure.
+
+**API Endpoints:**
+- `GET /api/airtable/{table}` - List records
+- `GET /api/airtable/{table}/{id}` - Get single record
+- `POST /api/airtable/{table}` - Create record
+- `PATCH /api/airtable/{table}/{id}` - Update record
+- `DELETE /api/airtable/{table}/{id}` - Delete record
+
+**Query Parameters:**
+- `view` - Airtable view name
+- `filterByFormula` - Airtable formula for filtering
+- `sort[0][field]` - Sort field
+- `sort[0][direction]` - Sort direction (asc/desc)
+- `pageSize` - Number of records per page
+- `offset` - Pagination offset
+{{else}}
+The application uses a custom API backend. Update the API endpoints in `src/js/services/apiService.js`.
+{{/if}}
+
+### Adding New Features
+
+1. **New API Endpoint**
+   {{#if enableCloudflareWorker}}
+   - Add handler in `worker/src/index.js`
+   {{else}}
+   - Add endpoint in your backend
+   {{/if}}
+   - Update `apiService.js` with new method
+
+2. **New UI Component**
+   - Create component in `src/js/components/`
+   - Import and use in `main.js`
+
+3. **New Page** (Multi-page setup)
+   - Create new HTML file
+   - Add to `vite.config.js` input
+   - Create corresponding JS entry point
+
+## 🧪 Testing
+
+{{#if enableTests}}
+Run tests with:
+
+```bash
+npm test
+```
+
+Run tests in watch mode:
+
+```bash
+npm run test:watch
+```
+
+Generate coverage report:
+
+```bash
+npm run test:coverage
+```
+{{else}}
+Testing is not configured. To add tests:
+
+1. Install testing dependencies:
+   ```bash
+   npm install -D vitest @testing-library/dom jsdom
+   ```
+
+2. Add test scripts to `package.json`
+3. Create `src/__tests__/` directory
+4. Write your tests!
+{{/if}}
+
+## 📝 Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📄 License
+
+This project is licensed under the {{license}} License.
+
+## 🤝 Support
+
+{{#if supportEmail}}
+For support, email {{supportEmail}}
+{{else}}
+For support, please create an issue in the repository.
+{{/if}}
+
+---
+
+Built with ❤️ using [PurAir Cloudflare Setup](https://github.com/purair/cloudflare-setup)

@@ -1,0 +1,512 @@
+/**
+ * Data Service - {{projectName}}
+ * 
+ * Handles data operations and business logic.
+ * Extends the base API service with domain-specific methods.
+ */
+
+{{#if (eq frameworkType "vanilla")}}
+import { ApiService } from './apiService.js';
+{{else}}
+import { apiService } from './apiService';
+{{/if}}
+
+export class DataService {
+  constructor(apiService) {
+    this.api = apiService || new ApiService();
+    this.cache = new Map();
+    this.cacheTimeout = {{#if cacheTimeout}}{{cacheTimeout}}{{else}}300000{{/if}}; // 5 minutes default
+  }
+
+  {{#if (eq apiType "airtable")}}
+  /**
+   * Fetch data from Airtable
+   */
+  async fetchAirtableData(options = {}) {
+    const {
+      table,
+      view,
+      fields,
+      filterByFormula,
+      maxRecords,
+      pageSize,
+      sort,
+      offset
+    } = options;
+    
+    try {
+      // Build query parameters
+      const params = {};
+      
+      if (view) params.view = view;
+      if (fields) params.fields = Array.isArray(fields) ? fields : [fields];
+      if (filterByFormula) params.filterByFormula = filterByFormula;
+      if (maxRecords) params.maxRecords = maxRecords;
+      if (pageSize) params.pageSize = pageSize;
+      if (offset) params.offset = offset;
+      
+      if (sort) {
+        params['sort[0][field]'] = sort.field;
+        params['sort[0][direction]'] = sort.direction || 'asc';
+      }
+      
+      // Make request
+      const response = await this.api.get(
+        this.api.buildAirtableURL(table),
+        { params }
+      );
+      
+      // Transform response
+      return this.transformAirtableResponse(response.data);
+      
+    } catch (error) {
+      console.error('Failed to fetch Airtable data:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get single record from Airtable
+   */
+  async getAirtableRecord(table, recordId) {
+    try {
+      const cacheKey = `${table}:${recordId}`;
+      
+      // Check cache
+      if (this.cache.has(cacheKey)) {
+        const cached = this.cache.get(cacheKey);
+        if (Date.now() - cached.timestamp < this.cacheTimeout) {
+          return cached.data;
+        }
+      }
+      
+      // Fetch record
+      const response = await this.api.get(
+        this.api.buildAirtableURL(table, recordId)
+      );
+      
+      const record = this.transformAirtableRecord(response.data);
+      
+      // Cache result
+      this.cache.set(cacheKey, {
+        data: record,
+        timestamp: Date.now()
+      });
+      
+      return record;
+      
+    } catch (error) {
+      console.error('Failed to get Airtable record:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Create record in Airtable
+   */
+  async createAirtableRecord(table, fields) {
+    try {
+      const response = await this.api.post(
+        this.api.buildAirtableURL(table),
+        { fields }
+      );
+      
+      return this.transformAirtableRecord(response.data);
+      
+    } catch (error) {
+      console.error('Failed to create Airtable record:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update record in Airtable
+   */
+  async updateAirtableRecord(table, recordId, fields) {
+    try {
+      const response = await this.api.patch(
+        this.api.buildAirtableURL(table, recordId),
+        { fields }
+      );
+      
+      // Invalidate cache
+      this.cache.delete(`${table}:${recordId}`);
+      
+      return this.transformAirtableRecord(response.data);
+      
+    } catch (error) {
+      console.error('Failed to update Airtable record:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete record from Airtable
+   */
+  async deleteAirtableRecord(table, recordId) {
+    try {
+      await this.api.delete(
+        this.api.buildAirtableURL(table, recordId)
+      );
+      
+      // Invalidate cache
+      this.cache.delete(`${table}:${recordId}`);
+      
+      return true;
+      
+    } catch (error) {
+      console.error('Failed to delete Airtable record:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Transform Airtable response
+   */
+  transformAirtableResponse(response) {
+    if (!response) return null;
+    
+    if (response.records) {
+      return {
+        records: response.records.map(record => this.transformAirtableRecord(record)),
+        offset: response.offset || null
+      };
+    }
+    
+    return this.transformAirtableRecord(response);
+  }
+
+  /**
+   * Transform Airtable record
+   */
+  transformAirtableRecord(record) {
+    if (!record) return null;
+    
+    return {
+      id: record.id,
+      ...record.fields,
+      _createdTime: record.createdTime,
+      _raw: record
+    };
+  }
+  {{/if}}
+
+  {{#if (eq apiType "custom")}}
+  /**
+   * Fetch data from custom API
+   */
+  async fetchData(options = {}) {
+    const {
+      endpoint,
+      page,
+      pageSize,
+      sort,
+      filter,
+      search
+    } = options;
+    
+    try {
+      // Build query parameters
+      const params = {};
+      
+      if (page) params.page = page;
+      if (pageSize) params.pageSize = pageSize;
+      if (sort) params.sort = sort;
+      if (search) params.search = search;
+      
+      // Add filters
+      if (filter) {
+        Object.entries(filter).forEach(([key, value]) => {
+          if (value !== undefined && value !== null && value !== '') {
+            params[`filter[${key}]`] = value;
+          }
+        });
+      }
+      
+      // Make request
+      const response = await this.api.get(endpoint, { params });
+      
+      return response.data;
+      
+    } catch (error) {
+      console.error('Failed to fetch data:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get single item
+   */
+  async getItem(endpoint, id) {
+    try {
+      const cacheKey = `${endpoint}:${id}`;
+      
+      // Check cache
+      if (this.cache.has(cacheKey)) {
+        const cached = this.cache.get(cacheKey);
+        if (Date.now() - cached.timestamp < this.cacheTimeout) {
+          return cached.data;
+        }
+      }
+      
+      // Fetch item
+      const response = await this.api.get(`${endpoint}/${id}`);
+      
+      // Cache result
+      this.cache.set(cacheKey, {
+        data: response.data,
+        timestamp: Date.now()
+      });
+      
+      return response.data;
+      
+    } catch (error) {
+      console.error('Failed to get item:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Create item
+   */
+  async createItem(endpoint, data) {
+    try {
+      const response = await this.api.post(endpoint, data);
+      return response.data;
+    } catch (error) {
+      console.error('Failed to create item:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update item
+   */
+  async updateItem(endpoint, id, data) {
+    try {
+      const response = await this.api.put(`${endpoint}/${id}`, data);
+      
+      // Invalidate cache
+      this.cache.delete(`${endpoint}:${id}`);
+      
+      return response.data;
+    } catch (error) {
+      console.error('Failed to update item:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete item
+   */
+  async deleteItem(endpoint, id) {
+    try {
+      await this.api.delete(`${endpoint}/${id}`);
+      
+      // Invalidate cache
+      this.cache.delete(`${endpoint}:${id}`);
+      
+      return true;
+    } catch (error) {
+      console.error('Failed to delete item:', error);
+      throw error;
+    }
+  }
+  {{/if}}
+
+  /**
+   * Batch operations
+   */
+  async batchOperation(operations) {
+    try {
+      const results = await Promise.allSettled(
+        operations.map(op => this.executeBatchOperation(op))
+      );
+      
+      return {
+        success: results.filter(r => r.status === 'fulfilled').map(r => r.value),
+        failed: results.filter(r => r.status === 'rejected').map(r => ({
+          reason: r.reason,
+          operation: operations[results.indexOf(r)]
+        }))
+      };
+    } catch (error) {
+      console.error('Batch operation failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Execute single batch operation
+   */
+  async executeBatchOperation(operation) {
+    const { type, ...params } = operation;
+    
+    switch (type) {
+      case 'create':
+        return this.createItem(params.endpoint, params.data);
+      case 'update':
+        return this.updateItem(params.endpoint, params.id, params.data);
+      case 'delete':
+        return this.deleteItem(params.endpoint, params.id);
+      default:
+        throw new Error(`Unknown operation type: ${type}`);
+    }
+  }
+
+  /**
+   * Search functionality
+   */
+  async search(query, options = {}) {
+    const {
+      {{#if (eq apiType "airtable")}}
+      table,
+      fields = [],
+      {{else}}
+      endpoint = '/search',
+      {{/if}}
+      limit = 10,
+      fuzzy = true
+    } = options;
+    
+    try {
+      {{#if (eq apiType "airtable")}}
+      // Build Airtable search formula
+      const searchFormula = this.buildSearchFormula(query, fields);
+      
+      return this.fetchAirtableData({
+        table,
+        filterByFormula: searchFormula,
+        maxRecords: limit
+      });
+      {{else}}
+      const response = await this.api.get(endpoint, {
+        params: {
+          q: query,
+          limit,
+          fuzzy
+        }
+      });
+      
+      return response.data;
+      {{/if}}
+    } catch (error) {
+      console.error('Search failed:', error);
+      throw error;
+    }
+  }
+
+  {{#if (eq apiType "airtable")}}
+  /**
+   * Build search formula for Airtable
+   */
+  buildSearchFormula(query, fields) {
+    if (!fields.length) {
+      return `SEARCH("${query}", ARRAYJOIN(RECORD_ID()))`;
+    }
+    
+    const searchConditions = fields.map(field => 
+      `SEARCH(LOWER("${query}"), LOWER({${field}}))`
+    );
+    
+    return `OR(${searchConditions.join(', ')})`;
+  }
+  {{/if}}
+
+  /**
+   * Export data
+   */
+  async exportData(format = 'csv', options = {}) {
+    try {
+      const endpoint = options.endpoint || '/export';
+      
+      const response = await this.api.get(endpoint, {
+        params: {
+          format,
+          ...options
+        },
+        responseType: 'blob'
+      });
+      
+      return response.data;
+    } catch (error) {
+      console.error('Export failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Import data
+   */
+  async importData(file, options = {}) {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      Object.entries(options).forEach(([key, value]) => {
+        formData.append(key, value);
+      });
+      
+      const response = await this.api.post('/import', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      
+      return response.data;
+    } catch (error) {
+      console.error('Import failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get statistics
+   */
+  async getStats(options = {}) {
+    try {
+      const endpoint = options.endpoint || '/stats';
+      
+      const response = await this.api.get(endpoint, {
+        params: options
+      });
+      
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get stats:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Clear cache
+   */
+  clearCache() {
+    this.cache.clear();
+  }
+
+  /**
+   * Get cache size
+   */
+  getCacheSize() {
+    return this.cache.size;
+  }
+
+  /**
+   * Prefetch data
+   */
+  async prefetch(items) {
+    const promises = items.map(item => {
+      if (typeof item === 'string') {
+        return this.getItem(item);
+      } else {
+        return this.getItem(item.endpoint, item.id);
+      }
+    });
+    
+    await Promise.allSettled(promises);
+  }
+}
+
+// Export singleton instance
+export const dataService = new DataService({{#if (eq frameworkType "vanilla")}}apiService{{else}}apiService{{/if}});

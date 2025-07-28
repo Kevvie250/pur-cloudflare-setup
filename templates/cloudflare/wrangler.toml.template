@@ -1,0 +1,125 @@
+name = "{{workerName}}"
+main = "{{mainScript}}"
+compatibility_date = "{{compatibilityDate}}"
+
+# Enable logging in Cloudflare
+[observability.logs]
+enabled = true
+
+# Account ID (optional, can be set via environment variable)
+{{#if cloudflareAccountId}}
+account_id = "{{cloudflareAccountId}}"
+{{/if}}
+
+{{#if useNodeCompat}}
+# Node.js compatibility
+node_compat = true
+{{/if}}
+
+{{#if kvNamespaces}}
+# KV Namespaces
+[[kv_namespaces]]
+binding = "{{kvBinding}}"
+id = "{{kvId}}"
+{{/if}}
+
+{{#if r2Buckets}}
+# R2 Storage Buckets
+[[r2_buckets]]
+binding = "{{r2Binding}}"
+bucket_name = "{{r2BucketName}}"
+{{/if}}
+
+{{#if durableObjects}}
+# Durable Objects
+[durable_objects]
+bindings = [
+  { name = "{{durableObjectName}}", class_name = "{{durableObjectClass}}" }
+]
+{{/if}}
+
+# Environment Configuration
+[env.production]
+name = "{{workerName}}-production"
+{{#if customDomain}}
+routes = [
+  { pattern = "{{domain}}/api/*", zone_name = "{{zoneName}}" },
+  { pattern = "api.{{domain}}/*", zone_name = "{{zoneName}}" }
+]
+{{else}}
+workers_dev = true
+{{/if}}
+
+# Environment Variables
+[env.production.vars]
+ENVIRONMENT = "production"
+{{#if allowedOrigins}}
+ALLOWED_ORIGINS = "{{allowedOrigins}}"
+{{/if}}
+{{#each envVars}}
+{{this.key}} = "{{this.value}}"
+{{/each}}
+
+# Staging Environment
+[env.staging]
+name = "{{workerName}}-staging"
+workers_dev = true
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+{{#if allowedOrigins}}
+ALLOWED_ORIGINS = "{{allowedOriginsStaging}}"
+{{/if}}
+{{#each envVars}}
+{{this.key}} = "{{this.value}}"
+{{/each}}
+
+# Development Environment
+[env.development]
+name = "{{workerName}}-development"
+workers_dev = true
+
+[env.development.vars]
+ENVIRONMENT = "development"
+ALLOWED_ORIGINS = "http://localhost:*,http://127.0.0.1:*"
+{{#each envVars}}
+{{this.key}} = "{{this.value}}"
+{{/each}}
+
+# Secrets to be configured (set via wrangler secret put command or Cloudflare dashboard):
+{{#each secrets}}
+# - {{this.name}}{{#if this.description}} : {{this.description}}{{/if}}
+{{/each}}
+
+{{#if rateLimiting}}
+# Rate limiting configuration
+[env.production.rate_limiting]
+enabled = true
+{{/if}}
+
+{{#if analytics}}
+# Analytics Engine
+[analytics_engine_datasets]
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "{{workerName}}_analytics"
+{{/if}}
+
+# Build configuration
+[build]
+command = "npm install && npm run build"
+{{#if buildWatch}}
+watch_paths = ["src/**/*.js", "src/**/*.ts"]
+{{/if}}
+
+{{#if compatibility_flags}}
+# Compatibility flags
+compatibility_flags = [{{#each compatibility_flags}}"{{this}}"{{#unless @last}}, {{/unless}}{{/each}}]
+{{/if}}
+
+# Tail consumers (for real-time logs)
+{{#if tailConsumers}}
+[tail_consumers]
+[[tail_consumers]]
+service = "{{tailService}}"
+{{/if}}

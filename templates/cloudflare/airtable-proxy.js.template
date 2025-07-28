@@ -1,0 +1,327 @@
+/**
+ * Cloudflare Worker - {{projectName}} API Proxy
+ * 
+ * This worker handles API requests from the frontend,
+ * adding authentication headers server-side to keep API keys secure.
+ * 
+ * Environment variables (set in Cloudflare dashboard):
+{{#each secrets}}
+ * - {{this.name}}: {{this.description}}
+{{/each}}
+ * - ALLOWED_ORIGINS: Comma-separated list of allowed origins
+ */
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    
+    // Health check endpoint
+    if (url.pathname === '/health' || url.pathname === '/api/health') {
+      return new Response(JSON.stringify({ 
+        status: 'healthy',
+        service: '{{projectName}}',
+        timestamp: new Date().toISOString()
+      }), {
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache'
+        }
+      });
+    }
+    
+    // Handle CORS preflight requests
+    if (request.method === 'OPTIONS') {
+      return handleCORS(request, env);
+    }
+
+    // Get origin for CORS handling
+    const origin = request.headers.get('Origin');
+    
+    // Verify origin for API calls
+    if (url.pathname.startsWith('/api/') && origin && !isAllowedOrigin(origin, env)) {
+      console.error('Origin check failed:', { 
+        origin, 
+        allowedOrigins: env.ALLOWED_ORIGINS,
+        pathname: url.pathname 
+      });
+      return new Response('Forbidden - Invalid origin', { 
+        status: 403,
+        headers: {
+          'Content-Type': 'text/plain'
+        }
+      });
+    }
+
+    // Route to appropriate handler based on API type
+    {{#if (eq apiType "airtable")}}
+    if (url.pathname.startsWith('/api/airtable/')) {
+      return handleAirtableRequest(request, env, ctx, url);
+    }
+    {{/if}}
+    
+    {{#if (eq apiType "custom")}}
+    if (url.pathname.startsWith('/api/')) {
+      return handleCustomAPI(request, env, ctx, url);
+    }
+    {{/if}}
+
+    {{#if enableWebhooks}}
+    // Webhook endpoints
+    if (url.pathname.startsWith('/webhooks/')) {
+      return handleWebhook(request, env, ctx, url);
+    }
+    {{/if}}
+
+    // 404 for unmatched routes
+    return new Response('Not Found', { 
+      status: 404,
+      headers: {
+        'Content-Type': 'text/plain'
+      }
+    });
+  }
+};
+
+/**
+ * Handle CORS preflight requests
+ */
+function handleCORS(request, env) {
+  const origin = request.headers.get('Origin');
+  const headers = {
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Max-Age': '86400',
+  };
+
+  if (origin && isAllowedOrigin(origin, env)) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Allow-Credentials'] = 'true';
+  }
+
+  return new Response(null, { status: 204, headers });
+}
+
+/**
+ * Check if origin is allowed
+ */
+function isAllowedOrigin(origin, env) {
+  if (!env.ALLOWED_ORIGINS) return false;
+  
+  const allowedOrigins = env.ALLOWED_ORIGINS.split(',').map(o => o.trim());
+  
+  // Check for exact match
+  if (allowedOrigins.includes(origin)) return true;
+  
+  // Check for wildcard patterns
+  for (const allowed of allowedOrigins) {
+    if (allowed.includes('*')) {
+      const pattern = allowed.replace(/\*/g, '.*');
+      const regex = new RegExp(`^${pattern}$`);
+      if (regex.test(origin)) return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Add CORS headers to response
+ */
+function addCORSHeaders(response, origin, env) {
+  const headers = new Headers(response.headers);
+  
+  if (origin && isAllowedOrigin(origin, env)) {
+    headers.set('Access-Control-Allow-Origin', origin);
+    headers.set('Access-Control-Allow-Credentials', 'true');
+  }
+  
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
+{{#if (eq apiType "airtable")}}
+/**
+ * Handle Airtable API requests
+ */
+async function handleAirtableRequest(request, env, ctx, url) {
+  const apiPath = url.pathname.replace('/api/airtable/', '');
+  
+  // Validate the request path
+  if (!apiPath || apiPath.includes('..')) {
+    return new Response('Invalid API path', { status: 400 });
+  }
+
+  // Build Airtable API URL
+  const airtableUrl = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${apiPath}${url.search}`;
+  
+  // Log request details (excluding sensitive data)
+  console.log('Airtable request:', {
+    method: request.method,
+    path: apiPath,
+    hasToken: !!env.AIRTABLE_TOKEN
+  });
+  
+  // Prepare headers for Airtable request
+  const headers = new Headers({
+    'Authorization': `Bearer ${env.AIRTABLE_TOKEN}`,
+    'Content-Type': 'application/json',
+  });
+
+  // Forward the request to Airtable
+  try {
+    const airtableResponse = await fetch(airtableUrl, {
+      method: request.method,
+      headers: headers,
+      body: request.method !== 'GET' && request.method !== 'HEAD' 
+        ? await request.text() 
+        : undefined,
+    });
+
+    // Create response with Airtable data
+    const responseBody = await airtableResponse.text();
+    const response = new Response(responseBody, {
+      status: airtableResponse.status,
+      statusText: airtableResponse.statusText,
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      }
+    });
+
+    // Add CORS headers and return
+    return addCORSHeaders(response, request.headers.get('Origin'), env);
+  } catch (error) {
+    console.error('Airtable request failed:', error);
+    return new Response(JSON.stringify({ 
+      error: 'Failed to fetch data',
+      message: error.message 
+    }), {
+      status: 500,
+      headers: { 
+        'Content-Type': 'application/json'
+      }
+    });
+  }
+}
+{{/if}}
+
+{{#if (eq apiType "custom")}}
+/**
+ * Handle custom API requests
+ */
+async function handleCustomAPI(request, env, ctx, url) {
+  const apiPath = url.pathname.replace('/api/', '');
+  
+  // Example: Route to different handlers based on path
+  switch (true) {
+    case apiPath.startsWith('users/'):
+      return handleUsersAPI(request, env, ctx, apiPath);
+    case apiPath.startsWith('data/'):
+      return handleDataAPI(request, env, ctx, apiPath);
+    default:
+      return new Response('API endpoint not found', { status: 404 });
+  }
+}
+
+/**
+ * Example handler for users API
+ */
+async function handleUsersAPI(request, env, ctx, path) {
+  // Implement your custom users API logic here
+  return new Response(JSON.stringify({ 
+    message: 'Users API not implemented',
+    path: path 
+  }), {
+    status: 501,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+/**
+ * Example handler for data API
+ */
+async function handleDataAPI(request, env, ctx, path) {
+  // Implement your custom data API logic here
+  return new Response(JSON.stringify({ 
+    message: 'Data API not implemented',
+    path: path 
+  }), {
+    status: 501,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+{{/if}}
+
+{{#if enableWebhooks}}
+/**
+ * Handle webhook requests
+ */
+async function handleWebhook(request, env, ctx, url) {
+  // Verify webhook signature if configured
+  {{#if webhookSecret}}
+  const signature = request.headers.get('X-Webhook-Signature');
+  if (!verifyWebhookSignature(await request.text(), signature, env.WEBHOOK_SECRET)) {
+    return new Response('Invalid signature', { status: 401 });
+  }
+  {{/if}}
+  
+  // Process webhook
+  const webhookPath = url.pathname.replace('/webhooks/', '');
+  
+  try {
+    // Log webhook received
+    console.log('Webhook received:', {
+      path: webhookPath,
+      method: request.method
+    });
+    
+    // Process based on webhook type
+    // Add your webhook processing logic here
+    
+    return new Response('Webhook processed', { status: 200 });
+  } catch (error) {
+    console.error('Webhook processing failed:', error);
+    return new Response('Webhook processing failed', { status: 500 });
+  }
+}
+
+{{#if webhookSecret}}
+/**
+ * Verify webhook signature
+ */
+function verifyWebhookSignature(payload, signature, secret) {
+  // Implement signature verification logic
+  // Example using HMAC-SHA256
+  return true; // Placeholder
+}
+{{/if}}
+{{/if}}
+
+{{#if enableAnalytics}}
+/**
+ * Track analytics event
+ */
+function trackEvent(env, eventName, properties = {}) {
+  if (env.ANALYTICS) {
+    env.ANALYTICS.writeDataPoint({
+      blobs: [eventName],
+      doubles: [Date.now()],
+      indexes: [properties.userId || 'anonymous']
+    });
+  }
+}
+{{/if}}
+
+{{#if enableRateLimiting}}
+/**
+ * Simple rate limiting implementation
+ */
+async function checkRateLimit(request, env) {
+  // Implement rate limiting logic
+  // This is a placeholder - use Cloudflare's built-in rate limiting for production
+  return true;
+}
+{{/if}}

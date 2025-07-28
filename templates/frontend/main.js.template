@@ -1,0 +1,752 @@
+/**
+ * {{projectName}} - Main Entry Point
+ * 
+ * This file initializes the application and sets up core functionality.
+ */
+
+import './styles/main.css';
+{{#if useTailwind}}
+import './styles/tailwind.css';
+{{/if}}
+{{#if (eq frameworkType "vanilla")}}
+import './styles/unified-design-system.css';
+{{/if}}
+
+// Import modules
+{{#if (eq frameworkType "vanilla")}}
+import { ApiService } from './js/services/apiService.js';
+import { DataService } from './js/services/dataService.js';
+import { UIManager } from './js/managers/uiManager.js';
+import { FilterManager } from './js/managers/filterManager.js';
+{{#if enableCharts}}
+import { ChartManager } from './js/managers/chartManager.js';
+{{/if}}
+{{#if enableDataTable}}
+import { TableManager } from './js/managers/tableManager.js';
+{{/if}}
+{{#if enableModals}}
+import { ModalService } from './js/services/modalService.js';
+{{/if}}
+{{#if enableToasts}}
+import { ToastService } from './js/services/toastService.js';
+{{/if}}
+import { config } from './js/config/index.js';
+import { logger } from './js/utils/logger.js';
+{{/if}}
+
+// Environment configuration
+const ENV = {
+  API_URL: import.meta.env.VITE_API_URL || '{{#if workerDevUrl}}{{workerDevUrl}}{{else}}/api{{/if}}',
+  DEBUG: import.meta.env.VITE_DEBUG === 'true',
+  VERSION: __APP_VERSION__ || '1.0.0',
+  BUILD_TIME: __BUILD_TIME__ || new Date().toISOString(),
+  {{#if enableFeatureFlags}}
+  FEATURES: __FEATURE_FLAGS__ || {},
+  {{/if}}
+};
+
+{{#if (eq frameworkType "vanilla")}}
+/**
+ * Application Class
+ */
+class App {
+  constructor() {
+    this.services = {};
+    this.managers = {};
+    this.state = {
+      initialized: false,
+      loading: true,
+      data: null,
+      filters: {},
+      {{#if enablePagination}}
+      pagination: {
+        page: 1,
+        pageSize: {{defaultPageSize}},
+        total: 0,
+        totalPages: 0
+      },
+      {{/if}}
+    };
+  }
+
+  /**
+   * Initialize the application
+   */
+  async init() {
+    try {
+      logger.info('Initializing {{projectName}}...', { version: ENV.VERSION });
+      
+      // Show loader
+      this.showLoader(true);
+      
+      // Initialize services
+      await this.initializeServices();
+      
+      // Initialize managers
+      await this.initializeManagers();
+      
+      // Setup event listeners
+      this.setupEventListeners();
+      
+      // Load initial data
+      await this.loadInitialData();
+      
+      // Hide loader and show app
+      this.showLoader(false);
+      this.showApp(true);
+      
+      // Mark as initialized
+      this.state.initialized = true;
+      
+      logger.info('{{projectName}} initialized successfully');
+      
+      {{#if enableToasts}}
+      // Show welcome message
+      this.services.toast.success('Welcome to {{projectName}}!');
+      {{/if}}
+      
+    } catch (error) {
+      logger.error('Failed to initialize application:', error);
+      this.handleInitError(error);
+    }
+  }
+
+  /**
+   * Initialize services
+   */
+  async initializeServices() {
+    // API Service
+    this.services.api = new ApiService({
+      baseURL: ENV.API_URL,
+      timeout: {{apiTimeout}},
+      {{#if enableAuth}}
+      auth: {
+        enabled: true,
+        tokenKey: '{{projectName}}_auth_token'
+      },
+      {{/if}}
+    });
+    
+    // Data Service
+    this.services.data = new DataService(this.services.api);
+    
+    {{#if enableModals}}
+    // Modal Service
+    this.services.modal = new ModalService({
+      container: '#modal-container'
+    });
+    {{/if}}
+    
+    {{#if enableToasts}}
+    // Toast Service
+    this.services.toast = new ToastService({
+      container: '#toast-container',
+      duration: {{toastDuration}},
+      position: '{{toastPosition}}'
+    });
+    {{/if}}
+  }
+
+  /**
+   * Initialize managers
+   */
+  async initializeManagers() {
+    // UI Manager
+    this.managers.ui = new UIManager({
+      services: this.services,
+      state: this.state
+    });
+    
+    {{#if enableFilters}}
+    // Filter Manager
+    this.managers.filter = new FilterManager({
+      services: this.services,
+      onChange: this.handleFilterChange.bind(this)
+    });
+    {{/if}}
+    
+    {{#if enableCharts}}
+    // Chart Manager
+    this.managers.chart = new ChartManager({
+      container: '#mainChart',
+      type: '{{defaultChartType}}',
+      responsive: true
+    });
+    {{/if}}
+    
+    {{#if enableDataTable}}
+    // Table Manager
+    this.managers.table = new TableManager({
+      container: '#mainTable',
+      columns: {{json tableColumns}},
+      {{#if enablePagination}}
+      pagination: {
+        enabled: true,
+        pageSize: {{defaultPageSize}}
+      },
+      {{/if}}
+      {{#if enableSorting}}
+      sorting: {
+        enabled: true,
+        defaultColumn: '{{defaultSortColumn}}',
+        defaultDirection: '{{defaultSortDirection}}'
+      },
+      {{/if}}
+    });
+    {{/if}}
+  }
+
+  /**
+   * Setup event listeners
+   */
+  setupEventListeners() {
+    // Refresh button
+    const refreshBtn = document.getElementById('refreshData');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => this.refreshData());
+    }
+    
+    {{#if enableExport}}
+    // Export button
+    const exportBtn = document.getElementById('exportData');
+    if (exportBtn) {
+      exportBtn.addEventListener('click', () => this.exportData());
+    }
+    {{/if}}
+    
+    {{#if enablePagination}}
+    // Pagination controls
+    const prevBtn = document.getElementById('prevPage');
+    const nextBtn = document.getElementById('nextPage');
+    
+    if (prevBtn) {
+      prevBtn.addEventListener('click', () => this.changePage(-1));
+    }
+    if (nextBtn) {
+      nextBtn.addEventListener('click', () => this.changePage(1));
+    }
+    {{/if}}
+    
+    // Handle window resize
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => {
+        this.handleResize();
+      }, 250);
+    });
+    
+    // Handle online/offline
+    window.addEventListener('online', () => this.handleOnline());
+    window.addEventListener('offline', () => this.handleOffline());
+  }
+
+  /**
+   * Load initial data
+   */
+  async loadInitialData() {
+    try {
+      this.setLoading(true);
+      
+      // Fetch data based on configuration
+      {{#if (eq apiType "airtable")}}
+      const data = await this.services.data.fetchAirtableData({
+        table: '{{defaultTable}}',
+        view: '{{defaultView}}',
+        {{#if enablePagination}}
+        pageSize: this.state.pagination.pageSize,
+        offset: (this.state.pagination.page - 1) * this.state.pagination.pageSize,
+        {{/if}}
+        ...this.state.filters
+      });
+      {{else}}
+      const data = await this.services.data.fetchData({
+        endpoint: '{{defaultEndpoint}}',
+        {{#if enablePagination}}
+        page: this.state.pagination.page,
+        pageSize: this.state.pagination.pageSize,
+        {{/if}}
+        ...this.state.filters
+      });
+      {{/if}}
+      
+      // Update state
+      this.updateState({ data });
+      
+      // Update UI
+      await this.updateUI();
+      
+    } catch (error) {
+      logger.error('Failed to load initial data:', error);
+      {{#if enableToasts}}
+      this.services.toast.error('Failed to load data. Please try again.');
+      {{/if}}
+    } finally {
+      this.setLoading(false);
+    }
+  }
+
+  /**
+   * Update UI with current data
+   */
+  async updateUI() {
+    const { data } = this.state;
+    
+    if (!data) return;
+    
+    {{#if enableStats}}
+    // Update stats
+    this.updateStats(data);
+    {{/if}}
+    
+    {{#if enableCharts}}
+    // Update charts
+    this.updateCharts(data);
+    {{/if}}
+    
+    {{#if enableDataTable}}
+    // Update table
+    this.updateTable(data);
+    {{/if}}
+    
+    {{#if enablePagination}}
+    // Update pagination
+    this.updatePagination();
+    {{/if}}
+  }
+
+  {{#if enableStats}}
+  /**
+   * Update statistics
+   */
+  updateStats(data) {
+    {{#each statsCards}}
+    const {{this.id}}Element = document.querySelector('[data-stat="{{this.id}}"]');
+    if ({{this.id}}Element) {
+      const value = this.calculateStat('{{this.id}}', data);
+      {{this.id}}Element.textContent = this.formatStatValue(value, '{{this.format}}');
+    }
+    {{/each}}
+  }
+  
+  /**
+   * Calculate statistic value
+   */
+  calculateStat(statId, data) {
+    // Implement your stat calculation logic here
+    switch (statId) {
+      {{#each statsCards}}
+      case '{{this.id}}':
+        return data.{{this.dataKey}} || 0;
+      {{/each}}
+      default:
+        return 0;
+    }
+  }
+  
+  /**
+   * Format statistic value
+   */
+  formatStatValue(value, format) {
+    switch (format) {
+      case 'number':
+        return new Intl.NumberFormat().format(value);
+      case 'currency':
+        return new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'USD'
+        }).format(value);
+      case 'percent':
+        return `${(value * 100).toFixed(1)}%`;
+      default:
+        return value;
+    }
+  }
+  {{/if}}
+
+  {{#if enableCharts}}
+  /**
+   * Update charts
+   */
+  updateCharts(data) {
+    // Transform data for charts
+    const chartData = this.transformDataForChart(data);
+    
+    // Update chart
+    this.managers.chart.update(chartData);
+  }
+  
+  /**
+   * Transform data for chart display
+   */
+  transformDataForChart(data) {
+    // Implement your data transformation logic here
+    return {
+      labels: data.labels || [],
+      datasets: [{
+        label: '{{defaultChartLabel}}',
+        data: data.values || [],
+        backgroundColor: '{{chartBackgroundColor}}',
+        borderColor: '{{chartBorderColor}}',
+        borderWidth: 1
+      }]
+    };
+  }
+  {{/if}}
+
+  {{#if enableDataTable}}
+  /**
+   * Update table
+   */
+  updateTable(data) {
+    const records = Array.isArray(data) ? data : (data.records || data.items || []);
+    this.managers.table.setData(records);
+  }
+  {{/if}}
+
+  {{#if enablePagination}}
+  /**
+   * Update pagination UI
+   */
+  updatePagination() {
+    const { pagination } = this.state;
+    
+    // Update page info
+    const currentPageEl = document.getElementById('currentPage');
+    const totalPagesEl = document.getElementById('totalPages');
+    const prevBtn = document.getElementById('prevPage');
+    const nextBtn = document.getElementById('nextPage');
+    
+    if (currentPageEl) currentPageEl.textContent = pagination.page;
+    if (totalPagesEl) totalPagesEl.textContent = pagination.totalPages;
+    
+    // Update button states
+    if (prevBtn) prevBtn.disabled = pagination.page <= 1;
+    if (nextBtn) nextBtn.disabled = pagination.page >= pagination.totalPages;
+  }
+  
+  /**
+   * Change page
+   */
+  async changePage(direction) {
+    const newPage = this.state.pagination.page + direction;
+    
+    if (newPage < 1 || newPage > this.state.pagination.totalPages) return;
+    
+    this.state.pagination.page = newPage;
+    await this.loadInitialData();
+  }
+  {{/if}}
+
+  {{#if enableFilters}}
+  /**
+   * Handle filter change
+   */
+  async handleFilterChange(filters) {
+    logger.debug('Filters changed:', filters);
+    
+    // Update state
+    this.state.filters = filters;
+    {{#if enablePagination}}
+    this.state.pagination.page = 1; // Reset to first page
+    {{/if}}
+    
+    // Reload data
+    await this.loadInitialData();
+  }
+  {{/if}}
+
+  /**
+   * Refresh data
+   */
+  async refreshData() {
+    logger.info('Refreshing data...');
+    
+    {{#if enableToasts}}
+    this.services.toast.info('Refreshing data...');
+    {{/if}}
+    
+    await this.loadInitialData();
+    
+    {{#if enableToasts}}
+    this.services.toast.success('Data refreshed successfully');
+    {{/if}}
+  }
+
+  {{#if enableExport}}
+  /**
+   * Export data
+   */
+  async exportData() {
+    try {
+      logger.info('Exporting data...');
+      
+      {{#if enableToasts}}
+      this.services.toast.info('Preparing export...');
+      {{/if}}
+      
+      // Get current data
+      const { data } = this.state;
+      const records = Array.isArray(data) ? data : (data.records || data.items || []);
+      
+      // Convert to CSV
+      const csv = this.convertToCSV(records);
+      
+      // Download file
+      this.downloadFile(csv, `{{projectName}}_export_${new Date().toISOString().split('T')[0]}.csv`, 'text/csv');
+      
+      {{#if enableToasts}}
+      this.services.toast.success('Data exported successfully');
+      {{/if}}
+      
+    } catch (error) {
+      logger.error('Export failed:', error);
+      {{#if enableToasts}}
+      this.services.toast.error('Failed to export data');
+      {{/if}}
+    }
+  }
+  
+  /**
+   * Convert data to CSV
+   */
+  convertToCSV(data) {
+    if (!data.length) return '';
+    
+    // Get headers from first object
+    const headers = Object.keys(data[0]);
+    const csvHeaders = headers.join(',');
+    
+    // Convert each row
+    const csvRows = data.map(row => {
+      return headers.map(header => {
+        const value = row[header];
+        // Escape quotes and wrap in quotes if contains comma
+        const escaped = String(value).replace(/"/g, '""');
+        return escaped.includes(',') ? `"${escaped}"` : escaped;
+      }).join(',');
+    });
+    
+    return [csvHeaders, ...csvRows].join('\n');
+  }
+  
+  /**
+   * Download file
+   */
+  downloadFile(content, filename, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    URL.revokeObjectURL(url);
+  }
+  {{/if}}
+
+  /**
+   * Handle window resize
+   */
+  handleResize() {
+    {{#if enableCharts}}
+    // Resize charts
+    if (this.managers.chart) {
+      this.managers.chart.resize();
+    }
+    {{/if}}
+    
+    // Update UI based on viewport
+    this.managers.ui.handleResize();
+  }
+
+  /**
+   * Handle online event
+   */
+  handleOnline() {
+    logger.info('Connection restored');
+    {{#if enableToasts}}
+    this.services.toast.success('Connection restored');
+    {{/if}}
+    
+    // Refresh data when coming back online
+    this.refreshData();
+  }
+
+  /**
+   * Handle offline event
+   */
+  handleOffline() {
+    logger.warn('Connection lost');
+    {{#if enableToasts}}
+    this.services.toast.warning('Connection lost. Some features may be unavailable.');
+    {{/if}}
+  }
+
+  /**
+   * Handle initialization error
+   */
+  handleInitError(error) {
+    // Hide loader
+    this.showLoader(false);
+    
+    // Show error message
+    const appEl = document.getElementById('app');
+    if (appEl) {
+      appEl.innerHTML = `
+        <div class="error-container">
+          <h2>Failed to Initialize</h2>
+          <p>We're sorry, but the application failed to load.</p>
+          <p class="error-message">${error.message}</p>
+          <button onclick="location.reload()" class="btn btn-primary">
+            Try Again
+          </button>
+        </div>
+      `;
+      appEl.style.display = 'block';
+    }
+  }
+
+  /**
+   * Update application state
+   */
+  updateState(updates) {
+    this.state = {
+      ...this.state,
+      ...updates
+    };
+    
+    logger.debug('State updated:', this.state);
+  }
+
+  /**
+   * Set loading state
+   */
+  setLoading(loading) {
+    this.state.loading = loading;
+    
+    // Update UI loading indicators
+    document.body.classList.toggle('is-loading', loading);
+    
+    // Disable/enable interactive elements
+    const buttons = document.querySelectorAll('button');
+    buttons.forEach(btn => {
+      btn.disabled = loading;
+    });
+  }
+
+  /**
+   * Show/hide loader
+   */
+  showLoader(show) {
+    const loader = document.getElementById('app-loader');
+    if (loader) {
+      loader.style.display = show ? 'flex' : 'none';
+    }
+  }
+
+  /**
+   * Show/hide app
+   */
+  showApp(show) {
+    const app = document.getElementById('app');
+    if (app) {
+      app.style.display = show ? 'block' : 'none';
+    }
+  }
+}
+
+// Initialize app when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  // Create global app instance
+  window.app = new App();
+  
+  // Initialize
+  window.app.init().catch(error => {
+    console.error('Failed to initialize app:', error);
+  });
+});
+
+{{else}}
+// Framework-specific initialization
+{{#if (eq frameworkType "react")}}
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+
+// Create root
+const root = ReactDOM.createRoot(document.getElementById('app'));
+
+// Render app
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+{{/if}}
+
+{{#if (eq frameworkType "vue")}}
+import { createApp } from 'vue';
+import App from './App.vue';
+{{#if useVueRouter}}
+import router from './router';
+{{/if}}
+{{#if usePinia}}
+import { createPinia } from 'pinia';
+{{/if}}
+
+// Create app
+const app = createApp(App);
+
+{{#if usePinia}}
+// Use Pinia
+app.use(createPinia());
+{{/if}}
+
+{{#if useVueRouter}}
+// Use Router
+app.use(router);
+{{/if}}
+
+// Mount app
+app.mount('#app');
+{{/if}}
+
+{{#if (eq frameworkType "svelte")}}
+import App from './App.svelte';
+
+// Create app
+const app = new App({
+  target: document.getElementById('app'),
+  props: {
+    name: '{{projectName}}'
+  }
+});
+
+export default app;
+{{/if}}
+
+{{#if (eq frameworkType "preact")}}
+import { render } from 'preact';
+import App from './App';
+
+// Render app
+render(<App />, document.getElementById('app'));
+{{/if}}
+{{/if}}
+
+// Log initialization
+console.log(`{{projectName}} v${ENV.VERSION} initialized`);
+console.log(`Build time: ${ENV.BUILD_TIME}`);
+
+{{#if enableHotReload}}
+// Hot Module Replacement
+if (import.meta.hot) {
+  import.meta.hot.accept(() => {
+    console.log('HMR update received');
+  });
+}
+{{/if}}

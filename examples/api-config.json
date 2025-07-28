@@ -1,0 +1,16 @@
+{
+  "projectName": "purair-api",
+  "domain": "api.purair.com",
+  "projectType": "api",
+  "features": [
+    "cors",
+    "rate-limiting",
+    "env-vars",
+    "headers"
+  ],
+  "environment": "production",
+  "useWrangler": true,
+  "useWorkers": true,
+  "useKV": true,
+  "useDurableObjects": false
+}

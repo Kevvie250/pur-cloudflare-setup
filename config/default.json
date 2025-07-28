@@ -1,0 +1,39 @@
+{
+  "defaults": {
+    "projectType": "site",
+    "environment": "development",
+    "useWrangler": true,
+    "features": [
+      "error-pages",
+      "redirects"
+    ]
+  },
+  "templates": {
+    "site": {
+      "description": "Static website with Cloudflare Pages",
+      "defaultFeatures": ["error-pages", "redirects", "headers"],
+      "requiredFiles": ["index.html", "_headers", "_redirects"]
+    },
+    "api": {
+      "description": "API service with Cloudflare Workers",
+      "defaultFeatures": ["cors", "rate-limiting", "env-vars"],
+      "requiredFiles": ["worker.js", "wrangler.toml"]
+    },
+    "app": {
+      "description": "Full stack application",
+      "defaultFeatures": ["error-pages", "env-vars", "headers"],
+      "requiredFiles": ["package.json", "wrangler.toml"]
+    }
+  },
+  "validation": {
+    "projectName": {
+      "minLength": 3,
+      "maxLength": 50,
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "domain": {
+      "allowSubdomains": true,
+      "requireTLD": true
+    }
+  }
+}

@@ -1,0 +1,446 @@
+/**
+ * API Service - {{projectName}}
+ * 
+ * Handles all API communication with the backend.
+ * Provides a centralized way to make HTTP requests with proper error handling.
+ */
+
+export class ApiService {
+  constructor(config = {}) {
+    this.baseURL = config.baseURL || '/api';
+    this.timeout = config.timeout || 30000;
+    this.headers = {
+      'Content-Type': 'application/json',
+      ...config.headers
+    };
+    
+    {{#if enableAuth}}
+    // Authentication configuration
+    this.auth = {
+      enabled: config.auth?.enabled || false,
+      tokenKey: config.auth?.tokenKey || '{{projectName}}_auth_token',
+      headerName: config.auth?.headerName || 'Authorization',
+      tokenPrefix: config.auth?.tokenPrefix || 'Bearer'
+    };
+    {{/if}}
+    
+    // Request interceptors
+    this.requestInterceptors = [];
+    this.responseInterceptors = [];
+    
+    // Initialize
+    this.init();
+  }
+
+  /**
+   * Initialize the API service
+   */
+  init() {
+    {{#if enableAuth}}
+    // Add auth interceptor if enabled
+    if (this.auth.enabled) {
+      this.addRequestInterceptor((config) => {
+        const token = this.getAuthToken();
+        if (token) {
+          config.headers[this.auth.headerName] = `${this.auth.tokenPrefix} ${token}`;
+        }
+        return config;
+      });
+    }
+    {{/if}}
+    
+    // Add default response interceptor for error handling
+    this.addResponseInterceptor(
+      (response) => response,
+      (error) => this.handleError(error)
+    );
+  }
+
+  /**
+   * Make a request
+   */
+  async request(config) {
+    // Apply request interceptors
+    let finalConfig = {
+      ...config,
+      headers: {
+        ...this.headers,
+        ...config.headers
+      }
+    };
+    
+    for (const interceptor of this.requestInterceptors) {
+      finalConfig = await interceptor(finalConfig);
+    }
+    
+    // Build full URL
+    const url = this.buildURL(finalConfig.url, finalConfig.params);
+    
+    // Create abort controller for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    
+    try {
+      // Make the request
+      const response = await fetch(url, {
+        method: finalConfig.method || 'GET',
+        headers: finalConfig.headers,
+        body: finalConfig.body ? JSON.stringify(finalConfig.body) : undefined,
+        signal: controller.signal,
+        credentials: finalConfig.credentials || 'same-origin'
+      });
+      
+      clearTimeout(timeoutId);
+      
+      // Parse response
+      const data = await this.parseResponse(response);
+      
+      // Create response object
+      const responseObj = {
+        data,
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+        config: finalConfig,
+        request: response
+      };
+      
+      // Apply response interceptors
+      let finalResponse = responseObj;
+      for (const interceptor of this.responseInterceptors) {
+        finalResponse = await interceptor.success(finalResponse);
+      }
+      
+      // Check for HTTP errors
+      if (!response.ok) {
+        throw new ApiError(
+          data.message || response.statusText,
+          response.status,
+          responseObj
+        );
+      }
+      
+      return finalResponse;
+      
+    } catch (error) {
+      clearTimeout(timeoutId);
+      
+      // Handle abort error
+      if (error.name === 'AbortError') {
+        throw new ApiError('Request timeout', 0, { config: finalConfig });
+      }
+      
+      // Apply error interceptors
+      let finalError = error;
+      for (const interceptor of this.responseInterceptors) {
+        if (interceptor.error) {
+          finalError = await interceptor.error(finalError);
+        }
+      }
+      
+      throw finalError;
+    }
+  }
+
+  /**
+   * Build full URL with query parameters
+   */
+  buildURL(endpoint, params) {
+    const url = new URL(
+      endpoint.startsWith('http') ? endpoint : `${this.baseURL}${endpoint}`,
+      window.location.origin
+    );
+    
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          url.searchParams.append(key, value);
+        }
+      });
+    }
+    
+    return url.toString();
+  }
+
+  /**
+   * Parse response based on content type
+   */
+  async parseResponse(response) {
+    const contentType = response.headers.get('content-type');
+    
+    if (contentType?.includes('application/json')) {
+      return response.json();
+    } else if (contentType?.includes('text/')) {
+      return response.text();
+    } else if (contentType?.includes('application/octet-stream')) {
+      return response.blob();
+    } else {
+      // Try to parse as JSON, fallback to text
+      const text = await response.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text;
+      }
+    }
+  }
+
+  /**
+   * Handle errors
+   */
+  handleError(error) {
+    console.error('API Error:', error);
+    
+    // Enhance error with additional context
+    if (error instanceof ApiError) {
+      return Promise.reject(error);
+    }
+    
+    // Network or other errors
+    const enhancedError = new ApiError(
+      error.message || 'Network error',
+      0,
+      { originalError: error }
+    );
+    
+    return Promise.reject(enhancedError);
+  }
+
+  /**
+   * GET request
+   */
+  async get(url, config = {}) {
+    return this.request({
+      ...config,
+      method: 'GET',
+      url
+    });
+  }
+
+  /**
+   * POST request
+   */
+  async post(url, data, config = {}) {
+    return this.request({
+      ...config,
+      method: 'POST',
+      url,
+      body: data
+    });
+  }
+
+  /**
+   * PUT request
+   */
+  async put(url, data, config = {}) {
+    return this.request({
+      ...config,
+      method: 'PUT',
+      url,
+      body: data
+    });
+  }
+
+  /**
+   * PATCH request
+   */
+  async patch(url, data, config = {}) {
+    return this.request({
+      ...config,
+      method: 'PATCH',
+      url,
+      body: data
+    });
+  }
+
+  /**
+   * DELETE request
+   */
+  async delete(url, config = {}) {
+    return this.request({
+      ...config,
+      method: 'DELETE',
+      url
+    });
+  }
+
+  /**
+   * Add request interceptor
+   */
+  addRequestInterceptor(interceptor) {
+    this.requestInterceptors.push(interceptor);
+    return () => {
+      const index = this.requestInterceptors.indexOf(interceptor);
+      if (index !== -1) {
+        this.requestInterceptors.splice(index, 1);
+      }
+    };
+  }
+
+  /**
+   * Add response interceptor
+   */
+  addResponseInterceptor(success, error) {
+    const interceptor = { success, error };
+    this.responseInterceptors.push(interceptor);
+    return () => {
+      const index = this.responseInterceptors.indexOf(interceptor);
+      if (index !== -1) {
+        this.responseInterceptors.splice(index, 1);
+      }
+    };
+  }
+
+  {{#if enableAuth}}
+  /**
+   * Get authentication token
+   */
+  getAuthToken() {
+    return localStorage.getItem(this.auth.tokenKey);
+  }
+
+  /**
+   * Set authentication token
+   */
+  setAuthToken(token) {
+    if (token) {
+      localStorage.setItem(this.auth.tokenKey, token);
+    } else {
+      localStorage.removeItem(this.auth.tokenKey);
+    }
+  }
+
+  /**
+   * Check if authenticated
+   */
+  isAuthenticated() {
+    return !!this.getAuthToken();
+  }
+
+  /**
+   * Clear authentication
+   */
+  clearAuth() {
+    this.setAuthToken(null);
+  }
+  {{/if}}
+
+  {{#if (eq apiType "airtable")}}
+  /**
+   * Build Airtable-specific URL
+   */
+  buildAirtableURL(table, recordId = null) {
+    let url = `/airtable/${encodeURIComponent(table)}`;
+    if (recordId) {
+      url += `/${encodeURIComponent(recordId)}`;
+    }
+    return url;
+  }
+
+  /**
+   * Format Airtable filter
+   */
+  formatAirtableFilter(filters) {
+    if (!filters || Object.keys(filters).length === 0) {
+      return null;
+    }
+    
+    const filterFormulas = Object.entries(filters)
+      .filter(([_, value]) => value !== undefined && value !== null && value !== '')
+      .map(([field, value]) => {
+        if (typeof value === 'boolean') {
+          return `{${field}} = ${value ? 'TRUE()' : 'FALSE()'}`;
+        } else if (typeof value === 'number') {
+          return `{${field}} = ${value}`;
+        } else {
+          return `{${field}} = "${value}"`;
+        }
+      });
+    
+    if (filterFormulas.length === 0) return null;
+    if (filterFormulas.length === 1) return filterFormulas[0];
+    
+    return `AND(${filterFormulas.join(', ')})`;
+  }
+  {{/if}}
+
+  /**
+   * Set base URL
+   */
+  setBaseURL(baseURL) {
+    this.baseURL = baseURL;
+  }
+
+  /**
+   * Set default headers
+   */
+  setHeaders(headers) {
+    this.headers = {
+      ...this.headers,
+      ...headers
+    };
+  }
+
+  /**
+   * Set timeout
+   */
+  setTimeout(timeout) {
+    this.timeout = timeout;
+  }
+}
+
+/**
+ * Custom API Error class
+ */
+export class ApiError extends Error {
+  constructor(message, status, response) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.response = response;
+    this.timestamp = new Date().toISOString();
+  }
+
+  /**
+   * Check if error is a specific status code
+   */
+  hasStatus(status) {
+    return this.status === status;
+  }
+
+  /**
+   * Check if error is a client error (4xx)
+   */
+  isClientError() {
+    return this.status >= 400 && this.status < 500;
+  }
+
+  /**
+   * Check if error is a server error (5xx)
+   */
+  isServerError() {
+    return this.status >= 500 && this.status < 600;
+  }
+
+  /**
+   * Check if error is a network error
+   */
+  isNetworkError() {
+    return this.status === 0;
+  }
+
+  /**
+   * Get error details
+   */
+  getDetails() {
+    return {
+      message: this.message,
+      status: this.status,
+      timestamp: this.timestamp,
+      response: this.response
+    };
+  }
+}
+
+// Export singleton instance
+export const apiService = new ApiService();
