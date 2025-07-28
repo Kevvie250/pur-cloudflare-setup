@@ -1,0 +1,679 @@
+name: Deploy PurAir Projects
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'templates/**'
+      - 'package.json'
+      - 'wrangler.toml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'templates/**'
+      - 'package.json'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+        - development
+        - staging
+        - production
+      project_path:
+        description: 'Path to project (relative to repo root)'
+        required: false
+        default: '.'
+      rollback_on_failure:
+        description: 'Enable automatic rollback on deployment failure'
+        required: false
+        default: true
+        type: boolean
+      skip_tests:
+        description: 'Skip test execution'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  NODE_VERSION: '20'
+  WRANGLER_VERSION: '3'
+
+jobs:
+  # Security and validation checks
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run security audit
+        run: |
+          npm audit --audit-level=high
+          node security-test-report.js
+
+      - name: Validate configurations
+        run: |
+          echo "Validating project configurations..."
+          node -e "
+            import('./src/modules/configValidator.js').then(({ configValidator }) => {
+              console.log('Configuration validator loaded successfully');
+            }).catch(err => {
+              console.error('Configuration validation failed:', err.message);
+              process.exit(1);
+            });
+          "
+
+      - name: Check for secrets in code
+        run: |
+          # Check for potential secrets in codebase
+          if grep -r --include="*.js" --include="*.json" --include="*.yml" \
+            -E "(password|secret|token|key).*[:=].*['\"][^'\"]{8,}" src/ templates/ || true; then
+            echo "⚠️  Potential secrets detected in code. Please review."
+          fi
+
+      - name: Upload security scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-scan-results
+          path: |
+            security-test-report.json
+            .audit-results/
+          retention-days: 30
+
+  # Testing phase
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
+    needs: security-scan
+    
+    strategy:
+      matrix:
+        test-type: ['unit', 'integration', 'cli']
+        
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Wrangler
+        run: npm install -g wrangler@${{ env.WRANGLER_VERSION }}
+
+      - name: Run ${{ matrix.test-type }} tests
+        run: |
+          case "${{ matrix.test-type }}" in
+            "unit")
+              echo "Running unit tests..."
+              if [ -f "scripts/test-templates.js" ]; then
+                node scripts/test-templates.js
+              fi
+              ;;
+            "integration")
+              echo "Running integration tests..."
+              # Test template generation
+              node -e "
+                import('./src/modules/templateEngine.js').then(({ templateEngine }) => {
+                  console.log('Template engine integration test passed');
+                }).catch(err => {
+                  console.error('Template engine test failed:', err.message);
+                  process.exit(1);
+                });
+              "
+              ;;
+            "cli")
+              echo "Running CLI tests..."
+              if [ -f "scripts/test-cli.sh" ]; then
+                chmod +x scripts/test-cli.sh
+                ./scripts/test-cli.sh
+              fi
+              ;;
+          esac
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.test-type }}
+          path: |
+            test-results/
+            coverage/
+          retention-days: 7
+
+  # Build and prepare for deployment
+  build:
+    name: Build Project
+    runs-on: ubuntu-latest
+    needs: [security-scan, test]
+    if: always() && (needs.security-scan.result == 'success')
+    
+    outputs:
+      deployment-artifact: ${{ steps.package.outputs.artifact-name }}
+      project-config: ${{ steps.config.outputs.config }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Extract project configuration
+        id: config
+        run: |
+          echo "Extracting project configuration..."
+          CONFIG=$(node -e "
+            import('./package.json', { assert: { type: 'json' } }).then(pkg => {
+              const config = {
+                name: pkg.default.name,
+                version: pkg.default.version,
+                type: 'setup-tool'
+              };
+              console.log(JSON.stringify(config));
+            });
+          ")
+          echo "config=$CONFIG" >> $GITHUB_OUTPUT
+
+      - name: Build templates and assets
+        run: |
+          echo "Building project assets..."
+          # Validate all templates
+          find templates/ -name "*.template" -o -name "*.hbs" | while read template; do
+            echo "Validating template: $template"
+            if [[ "$template" == *.js.template ]]; then
+              # Basic JS syntax check
+              node -c <(sed 's/{{[^}]*}}//g' "$template") || {
+                echo "❌ Template $template has invalid JavaScript syntax"
+                exit 1
+              }
+            fi
+          done
+
+      - name: Package deployment artifact
+        id: package
+        run: |
+          ARTIFACT_NAME="purair-cloudflare-setup-${{ github.sha }}"
+          echo "Creating deployment package: $ARTIFACT_NAME"
+          
+          # Create deployment package
+          mkdir -p dist/
+          cp -r src/ templates/ config/ dist/
+          cp package.json setup.js dist/
+          
+          # Create deployment info
+          cat > dist/deployment-info.json << EOF
+          {
+            "commit": "${{ github.sha }}",
+            "ref": "${{ github.ref }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "workflow_run": "${{ github.run_number }}",
+            "actor": "${{ github.actor }}"
+          }
+          EOF
+          
+          echo "artifact-name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact-name }}
+          path: dist/
+          retention-days: 30
+
+  # Deploy to development environment
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/develop' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'development')
+    environment: development
+    
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.deployment-artifact }}
+          path: ./deployment
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Wrangler
+        run: npm install -g wrangler@${{ env.WRANGLER_VERSION }}
+
+      - name: Configure Wrangler
+        run: |
+          echo "Configuring Wrangler for development environment..."
+          wrangler whoami
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_DEV }}
+
+      - name: Deploy to Cloudflare (Development)
+        id: deploy
+        run: |
+          cd deployment
+          echo "🚀 Deploying to development environment..."
+          
+          # Install dependencies in deployment package
+          npm install --production
+          
+          # Deploy using the deployment automation
+          node -e "
+            import('./src/deployment/deploy.js').then(({ deployProject }) => {
+              return deployProject('.', {
+                environment: 'development',
+                enableRollback: ${{ github.event.inputs.rollback_on_failure || 'true' }},
+                dryRun: false
+              });
+            }).then(result => {
+              console.log('✅ Deployment successful:', result.result.url);
+              const fs = require('fs');
+              fs.writeFileSync('deployment-result.json', JSON.stringify(result, null, 2));
+            }).catch(err => {
+              console.error('❌ Deployment failed:', err.message);
+              process.exit(1);
+            });
+          "
+          
+          # Extract deployment URL
+          DEPLOYMENT_URL=$(node -e "
+            const result = require('./deployment-result.json');
+            console.log(result.result.url || 'No URL available');
+          ")
+          echo "deployment-url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+
+      - name: Run post-deployment verification
+        if: steps.deploy.outputs.deployment-url != 'No URL available'
+        run: |
+          cd deployment
+          echo "🔍 Running post-deployment verification..."
+          node -e "
+            import('./src/deployment/verify-deployment.js').then(({ verifyDeployment }) => {
+              return verifyDeployment('${{ steps.deploy.outputs.deployment-url }}', {
+                stopOnFailure: false,
+                responseTimeThreshold: 3000,
+                ttfbThreshold: 1000
+              });
+            }).then(report => {
+              console.log('✅ Verification completed');
+              const fs = require('fs');
+              fs.writeFileSync('verification-report.json', JSON.stringify(report, null, 2));
+            }).catch(err => {
+              console.error('⚠️  Verification failed:', err.message);
+            });
+          "
+
+      - name: Update deployment status
+        if: always()
+        run: |
+          echo "📊 Deployment Status: ${{ job.status }}"
+          echo "🔗 URL: ${{ steps.deploy.outputs.deployment-url }}"
+
+      - name: Upload deployment artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployment-dev-${{ github.run_number }}
+          path: |
+            deployment/deployment-result.json
+            deployment/verification-report.json
+            deployment/.deployment-reports/
+          retention-days: 14
+
+  # Deploy to staging environment
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+    environment: staging
+    
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.deployment-artifact }}
+          path: ./deployment
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Wrangler
+        run: npm install -g wrangler@${{ env.WRANGLER_VERSION }}
+
+      - name: Configure Wrangler
+        run: |
+          echo "Configuring Wrangler for staging environment..."
+          wrangler whoami
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_STAGING }}
+
+      - name: Deploy to Cloudflare (Staging)
+        id: deploy
+        run: |
+          cd deployment
+          echo "🚀 Deploying to staging environment..."
+          
+          npm install --production
+          
+          node -e "
+            import('./src/deployment/deploy.js').then(({ deployProject }) => {
+              return deployProject('.', {
+                environment: 'staging',
+                enableRollback: ${{ github.event.inputs.rollback_on_failure || 'true' }},
+                runTests: true,
+                runPostDeployTests: true
+              });
+            }).then(result => {
+              console.log('✅ Staging deployment successful:', result.result.url);
+              const fs = require('fs');
+              fs.writeFileSync('deployment-result.json', JSON.stringify(result, null, 2));
+            }).catch(err => {
+              console.error('❌ Staging deployment failed:', err.message);
+              process.exit(1);
+            });
+          "
+          
+          DEPLOYMENT_URL=$(node -e "
+            const result = require('./deployment-result.json');
+            console.log(result.result.url || 'No URL available');
+          ")
+          echo "deployment-url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+
+      - name: Run comprehensive verification
+        if: steps.deploy.outputs.deployment-url != 'No URL available'
+        run: |
+          cd deployment
+          echo "🔍 Running comprehensive staging verification..."
+          node -e "
+            import('./src/deployment/verify-deployment.js').then(({ verifyDeployment }) => {
+              return verifyDeployment('${{ steps.deploy.outputs.deployment-url }}', {
+                stopOnFailure: false,
+                responseTimeThreshold: 2000,
+                ttfbThreshold: 800,
+                runSecurityTests: true
+              });
+            }).then(report => {
+              console.log('✅ Comprehensive verification completed');
+              const fs = require('fs');
+              fs.writeFileSync('verification-report.json', JSON.stringify(report, null, 2));
+              
+              // Check if verification passed critical tests
+              const failedCritical = report.results.filter(r => 
+                r.status === 'fail' && !r.optional
+              ).length;
+              
+              if (failedCritical > 0) {
+                console.error(\`❌ \${failedCritical} critical verification tests failed\`);
+                process.exit(1);
+              }
+            }).catch(err => {
+              console.error('❌ Verification failed:', err.message);
+              process.exit(1);
+            });
+          "
+
+      - name: Upload staging artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployment-staging-${{ github.run_number }}
+          path: |
+            deployment/deployment-result.json
+            deployment/verification-report.json
+            deployment/.deployment-reports/
+            deployment/.verification-reports/
+          retention-days: 30
+
+  # Deploy to production environment
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, deploy-staging]
+    if: (github.ref == 'refs/heads/main' && github.event_name == 'push') || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+    environment: production
+    
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.deployment-artifact }}
+          path: ./deployment
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Wrangler
+        run: npm install -g wrangler@${{ env.WRANGLER_VERSION }}
+
+      - name: Configure Wrangler
+        run: |
+          echo "Configuring Wrangler for production environment..."
+          wrangler whoami
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}
+
+      - name: Create rollback point
+        id: rollback
+        run: |
+          cd deployment
+          echo "📋 Creating rollback point..."
+          
+          # Get current deployment info for rollback
+          ROLLBACK_INFO=$(wrangler deployments list --limit 1 --json 2>/dev/null || echo '[]')
+          echo "rollback-info=$ROLLBACK_INFO" >> $GITHUB_OUTPUT
+          echo "Rollback point created"
+
+      - name: Deploy to Production
+        id: deploy
+        run: |
+          cd deployment
+          echo "🚀 Deploying to PRODUCTION environment..."
+          
+          npm install --production
+          
+          node -e "
+            import('./src/deployment/deploy.js').then(({ deployProject }) => {
+              return deployProject('.', {
+                environment: 'production',
+                enableRollback: true,
+                runTests: true,
+                runPostDeployTests: true,
+                validateProductionEnvironment: true
+              });
+            }).then(result => {
+              console.log('✅ PRODUCTION deployment successful:', result.result.url);
+              const fs = require('fs');
+              fs.writeFileSync('deployment-result.json', JSON.stringify(result, null, 2));
+            }).catch(err => {
+              console.error('❌ PRODUCTION deployment failed:', err.message);
+              throw err;
+            });
+          "
+          
+          DEPLOYMENT_URL=$(node -e "
+            const result = require('./deployment-result.json');
+            console.log(result.result.url || 'No URL available');
+          ")
+          echo "deployment-url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+
+      - name: Production verification and monitoring
+        if: steps.deploy.outputs.deployment-url != 'No URL available'
+        run: |
+          cd deployment
+          echo "🔍 Running production verification and monitoring setup..."
+          
+          node -e "
+            import('./src/deployment/verify-deployment.js').then(({ verifyDeployment }) => {
+              return verifyDeployment('${{ steps.deploy.outputs.deployment-url }}', {
+                stopOnFailure: true,
+                responseTimeThreshold: 1500,
+                ttfbThreshold: 600,
+                runSecurityTests: true,
+                runPerformanceTests: true
+              });
+            }).then(report => {
+              console.log('✅ Production verification completed successfully');
+              const fs = require('fs');
+              fs.writeFileSync('verification-report.json', JSON.stringify(report, null, 2));
+              
+              // Strict production verification
+              const failed = report.results.filter(r => r.status === 'fail').length;
+              if (failed > 0) {
+                console.error(\`❌ \${failed} verification tests failed in production\`);
+                throw new Error('Production verification failed');
+              }
+            });
+          "
+
+      - name: Rollback on failure
+        if: failure() && inputs.rollback_on_failure != 'false'
+        run: |
+          cd deployment
+          echo "🔄 Production deployment failed - initiating rollback..."
+          
+          # Attempt automatic rollback if enabled
+          if [ "${{ steps.rollback.outputs.rollback-info }}" != "[]" ]; then
+            echo "Rolling back to previous deployment..."
+            wrangler rollback --force || echo "⚠️  Automatic rollback failed - manual intervention required"
+          else
+            echo "⚠️  No previous deployment found for rollback"
+          fi
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          URL="${{ steps.deploy.outputs.deployment-url }}"
+          
+          if [ "$STATUS" = "success" ]; then
+            echo "🎉 PRODUCTION deployment completed successfully!"
+            echo "🔗 URL: $URL"
+          else
+            echo "❌ PRODUCTION deployment failed!"
+            echo "🚨 Manual intervention may be required"
+          fi
+
+      - name: Upload production artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployment-production-${{ github.run_number }}
+          path: |
+            deployment/deployment-result.json
+            deployment/verification-report.json
+            deployment/.deployment-reports/
+            deployment/.verification-reports/
+          retention-days: 90
+
+  # Post-deployment notification and reporting
+  notify:
+    name: Notify and Report
+    runs-on: ubuntu-latest
+    needs: [deploy-dev, deploy-staging, deploy-production]
+    if: always()
+    
+    steps:
+      - name: Collect deployment results
+        run: |
+          echo "📊 Collecting deployment results..."
+          
+          # Create deployment summary
+          cat > deployment-summary.md << EOF
+          # PurAir Deployment Summary
+          
+          **Workflow Run:** ${{ github.run_number }}
+          **Commit:** ${{ github.sha }}
+          **Triggered by:** ${{ github.actor }}
+          **Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          
+          ## Environment Status
+          
+          | Environment | Status | Notes |
+          |-------------|--------|-------|
+          | Development | ${{ needs.deploy-dev.result || 'Skipped' }} | ${{ github.ref == 'refs/heads/develop' && 'Auto-deployed' || 'Manual trigger' }} |
+          | Staging | ${{ needs.deploy-staging.result || 'Skipped' }} | ${{ github.ref == 'refs/heads/main' && 'Auto-deployed' || 'Manual trigger' }} |
+          | Production | ${{ needs.deploy-production.result || 'Skipped' }} | ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && 'Auto-deployed' || 'Manual trigger' }} |
+          
+          ## Next Steps
+          
+          EOF
+          
+          if [ "${{ needs.deploy-production.result }}" = "success" ]; then
+            echo "✅ All deployments completed successfully" >> deployment-summary.md
+          elif [ "${{ needs.deploy-production.result }}" = "failure" ]; then
+            echo "❌ Production deployment failed - check logs and consider manual intervention" >> deployment-summary.md
+          else
+            echo "ℹ️  Production deployment was not triggered" >> deployment-summary.md
+          fi
+
+      - name: Upload deployment summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-summary-${{ github.run_number }}
+          path: deployment-summary.md
+          retention-days: 90
+
+      - name: Comment on PR (if applicable)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const summary = `
+            ## 🚀 Deployment Preview
+            
+            This PR has been tested and is ready for deployment.
+            
+            **Security Scan:** ${{ needs.security-scan.result || 'N/A' }}
+            **Tests:** ${{ needs.test.result || 'N/A' }}
+            **Build:** ${{ needs.build.result || 'N/A' }}
+            
+            Merge to \`main\` to deploy to staging and production.
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });

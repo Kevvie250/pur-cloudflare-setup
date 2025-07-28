@@ -1,0 +1,502 @@
+name: Deploy {{projectName}}
+
+on:
+  push:
+    branches: [{{#if prodBranch}}{{prodBranch}}{{else}}main{{/if}}{{#if devBranch}}, {{devBranch}}{{/if}}]
+    paths:
+      - 'src/**'
+      {{#if hasPublicDir}}- 'public/**'{{/if}}
+      {{#if hasStylesDir}}- 'styles/**'{{/if}}
+      - 'package.json'
+      {{#if hasWrangler}}- 'wrangler.toml'{{/if}}
+  pull_request:
+    branches: [{{#if prodBranch}}{{prodBranch}}{{else}}main{{/if}}]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: '{{defaultEnvironment}}'
+        type: choice
+        options:
+        {{#each environments}}
+        - {{this}}
+        {{/each}}
+      skip_tests:
+        description: 'Skip test execution'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  NODE_VERSION: '{{nodeVersion}}'
+  {{#if hasWrangler}}WRANGLER_VERSION: '{{wranglerVersion}}'{{/if}}
+  {{#if projectKey}}PROJECT_KEY: '{{projectKey}}'{{/if}}
+
+jobs:
+  # Pre-deployment checks
+  validate:
+    name: Validate Project
+    runs-on: ubuntu-latest
+    
+    outputs:
+      project-type: ${{{{ steps.detect.outputs.project-type }}}}
+      has-tests: ${{{{ steps.detect.outputs.has-tests }}}}
+      deploy-target: ${{{{ steps.detect.outputs.deploy-target }}}}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{{{ env.NODE_VERSION }}}}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Detect project configuration
+        id: detect
+        run: |
+          echo "🔍 Detecting project configuration..."
+          
+          # Determine project type
+          PROJECT_TYPE="{{projectType}}"
+          echo "project-type=$PROJECT_TYPE" >> $GITHUB_OUTPUT
+          
+          # Check for tests
+          if [ -f "package.json" ] && grep -q '"test"' package.json; then
+            echo "has-tests=true" >> $GITHUB_OUTPUT
+          else
+            echo "has-tests=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Determine deployment target
+          {{#if useSharedWorker}}
+          echo "deploy-target=shared-worker" >> $GITHUB_OUTPUT
+          {{else if hasWrangler}}
+          echo "deploy-target=cloudflare-workers" >> $GITHUB_OUTPUT
+          {{else}}
+          echo "deploy-target=cloudflare-pages" >> $GITHUB_OUTPUT
+          {{/if}}
+
+      - name: Validate configuration files
+        run: |
+          echo "✅ Validating configuration files..."
+          
+          {{#if hasWrangler}}
+          # Validate wrangler.toml if present
+          if [ -f "wrangler.toml" ]; then
+            echo "Validating wrangler.toml..."
+            npx wrangler validate || exit 1
+          fi
+          {{/if}}
+          
+          # Validate package.json
+          node -e "
+            const pkg = require('./package.json');
+            if (!pkg.name || !pkg.version) {
+              console.error('❌ package.json missing required fields');
+              process.exit(1);
+            }
+            console.log('✅ package.json validation passed');
+          "
+
+      - name: Security scan
+        run: |
+          echo "🔒 Running security checks..."
+          
+          # Basic security audit
+          npm audit --audit-level=moderate || echo "⚠️  Security vulnerabilities detected"
+          
+          # Check for secrets in code
+          if find . -name "*.js" -o -name "*.json" -o -name "*.yml" | \
+            xargs grep -l -E "(password|secret|token|key).*[:=].*['\"][^'\"]{8,}" 2>/dev/null; then
+            echo "⚠️  Potential secrets detected - please review"
+          fi
+
+  # Testing phase
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    needs: validate
+    if: needs.validate.outputs.has-tests == 'true' && !inputs.skip_tests
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{{{ env.NODE_VERSION }}}}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      {{#if hasWrangler}}
+      - name: Install Wrangler
+        run: npm install -g wrangler@${{{{ env.WRANGLER_VERSION }}}}
+      {{/if}}
+
+      - name: Run tests
+        run: |
+          echo "🧪 Running tests..."
+          npm test
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{{{ github.run_number }}}}
+          path: |
+            test-results/
+            coverage/
+          retention-days: 7
+
+  # Build phase
+  build:
+    name: Build Project
+    runs-on: ubuntu-latest
+    needs: validate
+    if: always() && needs.validate.result == 'success'
+    
+    outputs:
+      build-artifact: ${{{{ steps.package.outputs.artifact-name }}}}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{{{ env.NODE_VERSION }}}}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      {{#if buildCommand}}
+      - name: Build project
+        run: {{buildCommand}}
+      {{else}}
+      - name: Build project
+        run: |
+          if npm run build --if-present; then
+            echo "✅ Build completed successfully"
+          else
+            echo "ℹ️  No build script found, using source files directly"
+          fi
+      {{/if}}
+
+      - name: Package for deployment
+        id: package
+        run: |
+          echo "📦 Creating deployment package..."
+          
+          ARTIFACT_NAME="{{kebabCase projectName}}-${{{{ github.sha }}}}"
+          echo "artifact-name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          
+          # Create deployment package
+          mkdir -p deployment/
+          
+          {{#if buildOutput}}
+          # Copy build output
+          cp -r {{buildOutput}}/* deployment/
+          {{else}}
+          # Copy source files
+          cp -r src/ deployment/ 2>/dev/null || true
+          {{#if hasPublicDir}}cp -r public/ deployment/ 2>/dev/null || true{{/if}}
+          {{#if hasStylesDir}}cp -r styles/ deployment/ 2>/dev/null || true{{/if}}
+          {{/if}}
+          
+          # Copy configuration files
+          cp package.json deployment/
+          {{#if hasWrangler}}cp wrangler.toml deployment/ 2>/dev/null || true{{/if}}
+          
+          # Create deployment metadata
+          cat > deployment/deployment-info.json << EOF
+          {
+            "project": "{{projectName}}",
+            "type": "{{projectType}}",
+            "commit": "${{{{ github.sha }}}}",
+            "ref": "${{{{ github.ref }}}}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "workflow_run": "${{{{ github.run_number }}}}",
+            "actor": "${{{{ github.actor }}}}"
+          }
+          EOF
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{{{ steps.package.outputs.artifact-name }}}}
+          path: deployment/
+          retention-days: 30
+
+  {{#each environments}}
+  # Deploy to {{this}} environment
+  deploy-{{this}}:
+    name: Deploy to {{capitalize this}}
+    runs-on: ubuntu-latest
+    needs: [validate, build]
+    {{#if (eq this "production")}}
+    {{#if ../hasStaging}}needs: [validate, build, deploy-staging]{{/if}}
+    {{/if}}
+    if: |
+      {{#if (eq this "development")}}
+      github.ref == 'refs/heads/{{../devBranch}}' || 
+      (github.event_name == 'workflow_dispatch' && inputs.environment == '{{this}}')
+      {{else if (eq this "staging")}}
+      github.ref == 'refs/heads/{{../prodBranch}}' || 
+      (github.event_name == 'workflow_dispatch' && inputs.environment == '{{this}}')
+      {{else if (eq this "production")}}
+      (github.ref == 'refs/heads/{{../prodBranch}}' && github.event_name == 'push') || 
+      (github.event_name == 'workflow_dispatch' && inputs.environment == '{{this}}')
+      {{else}}
+      github.event_name == 'workflow_dispatch' && inputs.environment == '{{this}}'
+      {{/if}}
+    environment: {{this}}
+    
+    outputs:
+      deployment-url: ${{{{ steps.deploy.outputs.deployment-url }}}}
+      
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{{{ needs.build.outputs.build-artifact }}}}
+          path: ./deployment
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{{{ env.NODE_VERSION }}}}
+
+      {{#if ../hasWrangler}}
+      - name: Install Wrangler
+        run: npm install -g wrangler@${{{{ env.WRANGLER_VERSION }}}}
+
+      - name: Configure Wrangler
+        run: |
+          echo "Configuring Wrangler for {{this}} environment..."
+          wrangler whoami
+        env:
+          CLOUDFLARE_API_TOKEN: ${{{{ secrets.CLOUDFLARE_API_TOKEN_{{uppercase this}} }}}}
+      {{/if}}
+
+      {{#if ../useSharedWorker}}
+      - name: Configure Shared Worker
+        run: |
+          echo "🔧 Configuring shared worker integration..."
+          echo "Project will use shared API worker at: {{../sharedWorkerUrl}}"
+          
+          # Verify shared worker configuration
+          curl -f "{{../sharedWorkerUrl}}/api/debug" | grep -q "{{../projectKey}}" || {
+            echo "❌ Project not configured in shared worker"
+            echo "ℹ️  Please run the shared worker registration process"
+            exit 1
+          }
+      {{/if}}
+
+      - name: Deploy to {{capitalize this}}
+        id: deploy
+        run: |
+          cd deployment
+          echo "🚀 Deploying to {{this}} environment..."
+          
+          {{#if ../useSharedWorker}}
+          # Shared worker deployment - update frontend only
+          echo "📝 Updating frontend configuration for shared worker..."
+          
+          # Update environment configuration
+          cat > .env.{{this}} << EOF
+          VITE_API_BASE_URL={{../sharedWorkerUrl}}/api/airtable
+          VITE_PROJECT_KEY={{../projectKey}}
+          VITE_ENVIRONMENT={{this}}
+          EOF
+          
+          # Deploy to Cloudflare Pages
+          npx wrangler pages deploy . --project-name={{../kebabCase ../projectName}}-{{this}} --compatibility-date=$(date +%Y-%m-%d)
+          
+          {{else if ../hasWrangler}}
+          # Standard Cloudflare Workers deployment
+          npm install --production
+          
+          {{#if (eq this "production")}}
+          # Production deployment with extra validation
+          wrangler deploy --env {{this}} --minify
+          {{else}}
+          wrangler deploy --env {{this}}
+          {{/if}}
+          
+          {{else}}
+          # Cloudflare Pages deployment
+          npx wrangler pages deploy . --project-name={{../kebabCase ../projectName}}-{{this}} --compatibility-date=$(date +%Y-%m-%d)
+          {{/if}}
+          
+          # Extract deployment URL (implementation depends on deployment type)
+          {{#if ../hasWrangler}}
+          DEPLOYMENT_URL=$(wrangler deployments list --env {{this}} --limit 1 --format json | jq -r '.[0].url // "No URL available"')
+          {{else}}
+          DEPLOYMENT_URL="https://{{../kebabCase ../projectName}}-{{this}}.pages.dev"
+          {{/if}}
+          
+          echo "deployment-url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+          echo "✅ Deployment completed: $DEPLOYMENT_URL"
+
+      {{#if (eq this "production")}}
+      - name: Create rollback point
+        if: success()
+        run: |
+          echo "📋 Creating rollback point for production..."
+          {{#if ../hasWrangler}}
+          wrangler deployments list --env production --limit 1 > rollback-info.txt
+          {{/if}}
+      {{/if}}
+
+      - name: Post-deployment verification
+        if: steps.deploy.outputs.deployment-url != 'No URL available'
+        run: |
+          echo "🔍 Running post-deployment verification..."
+          
+          DEPLOYMENT_URL="${{ steps.deploy.outputs.deployment-url }}"
+          
+          # Basic health check
+          echo "Testing: $DEPLOYMENT_URL"
+          for i in {1..5}; do
+            if curl -f -s -o /dev/null "$DEPLOYMENT_URL"; then
+              echo "✅ Health check passed"
+              break
+            else
+              echo "⏳ Waiting for deployment to be ready... (attempt $i/5)"
+              sleep 10
+            fi
+          done
+          
+          # Test API endpoints if applicable
+          {{#if ../apiEndpoints}}
+          {{#each ../apiEndpoints}}
+          echo "Testing API endpoint: $DEPLOYMENT_URL{{this}}"
+          curl -f -s "$DEPLOYMENT_URL{{this}}" > /dev/null || echo "⚠️  API endpoint {{this}} not responding"
+          {{/each}}
+          {{/if}}
+
+      - name: Update deployment status
+        if: always()
+        run: |
+          echo "📊 {{capitalize this}} Deployment Status: ${{{{ job.status }}}}"
+          echo "🔗 URL: ${{{{ steps.deploy.outputs.deployment-url }}}}"
+
+      - name: Upload deployment artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployment-{{this}}-${{{{ github.run_number }}}}
+          path: |
+            deployment/deployment-info.json
+            {{#if (eq this "production")}}rollback-info.txt{{/if}}
+          retention-days: {{#if (eq this "production")}}90{{else}}30{{/if}}
+
+  {{/each}}
+
+  # Notification and reporting
+  notify:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [{{#each environments}}deploy-{{this}}{{#unless @last}}, {{/unless}}{{/each}}]
+    if: always()
+    
+    steps:
+      - name: Generate deployment summary
+        run: |
+          echo "📊 Generating deployment summary..."
+          
+          cat > deployment-summary.md << EOF
+          # {{projectName}} Deployment Summary
+          
+          **Workflow Run:** ${{{{ github.run_number }}}}
+          **Commit:** ${{{{ github.sha }}}}
+          **Triggered by:** ${{{{ github.actor }}}}
+          **Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          
+          ## Environment Status
+          
+          | Environment | Status | URL |
+          |-------------|--------|-----|
+          {{#each environments}}
+          | {{capitalize this}} | ${{{{ needs.deploy-{{this}}.result || 'Skipped' }}}} | ${{{{ needs.deploy-{{this}}.outputs.deployment-url || 'N/A' }}}} |
+          {{/each}}
+          
+          {{#if useSharedWorker}}
+          ## Shared Worker Configuration
+          
+          This project uses the shared PurAir API worker:
+          - **API Base:** {{sharedWorkerUrl}}/api/airtable
+          - **Project Key:** {{projectKey}}
+          - **Headers:** X-PurAir-Project: {{kebabCase projectKey}}
+          {{/if}}
+          
+          ## Project Configuration
+          
+          - **Type:** {{projectType}}
+          - **Node Version:** {{nodeVersion}}
+          {{#if hasWrangler}}- **Wrangler Version:** {{wranglerVersion}}{{/if}}
+          {{#if useSharedWorker}}- **Shared Worker:** Yes{{/if}}
+          
+          EOF
+
+      - name: Upload deployment summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-summary-${{{{ github.run_number }}}}
+          path: deployment-summary.md
+          retention-days: 90
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const summary = `
+            ## 🚀 {{projectName}} Deployment Preview
+            
+            This PR has been validated and is ready for deployment.
+            
+            **Validation:** ${{{{ needs.validate.result || 'N/A' }}}}
+            **Tests:** ${{{{ needs.test.result || 'Skipped' }}}}
+            **Build:** ${{{{ needs.build.result || 'N/A' }}}}
+            
+            {{#if useSharedWorker}}
+            **Configuration:** Using shared API worker
+            {{/if}}
+            
+            Merge to deploy to {{#if prodBranch}}{{prodBranch}}{{else}}main{{/if}}.
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+
+      {{#if notificationWebhook}}
+      - name: Send notification
+        if: always()
+        run: |
+          # Send deployment notification
+          curl -X POST "{{notificationWebhook}}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "project": "{{projectName}}",
+              "status": "${{{{ job.status }}}}",
+              "commit": "${{{{ github.sha }}}}",
+              "actor": "${{{{ github.actor }}}}",
+              "workflow_run": "${{{{ github.run_number }}}}"
+            }' || echo "⚠️  Notification webhook failed"
+      {{/if}}

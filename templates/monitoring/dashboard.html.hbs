@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{projectName}} - Monitoring Dashboard</title>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --success-color: #059669;
+            --warning-color: #d97706;
+            --error-color: #dc2626;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --border-color: #e5e7eb;
+            --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+
+        .header {
+            background: linear-gradient(135deg, var(--primary-color), #1d4ed8);
+            color: white;
+            padding: 2rem 0;
+            box-shadow: var(--shadow);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 1rem;
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+
+        .status-healthy {
+            background-color: var(--success-color);
+            color: white;
+        }
+
+        .status-unhealthy {
+            background-color: var(--error-color);
+            color: white;
+        }
+
+        .status-degraded {
+            background-color: var(--warning-color);
+            color: white;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: currentColor;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .main-content {
+            padding: 2rem 0;
+        }
+
+        .grid {
+            display: grid;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .grid-cols-4 {
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        }
+
+        .grid-cols-2 {
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .card-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .metric-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary-color);
+        }
+
+        .metric-label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+
+        .service-list {
+            list-style: none;
+        }
+
+        .service-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .service-item:last-child {
+            border-bottom: none;
+        }
+
+        .service-name {
+            font-weight: 500;
+        }
+
+        .service-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .status-dot.healthy { background-color: var(--success-color); }
+        .status-dot.unhealthy { background-color: var(--error-color); }
+        .status-dot.degraded { background-color: var(--warning-color); }
+
+        .alert {
+            padding: 1rem;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid;
+        }
+
+        .alert-warning {
+            background-color: #fef3c7;
+            border-color: var(--warning-color);
+            color: #92400e;
+        }
+
+        .alert-error {
+            background-color: #fee2e2;
+            border-color: var(--error-color);
+            color: #991b1b;
+        }
+
+        .chart-container {
+            height: 200px;
+            margin-top: 1rem;
+            position: relative;
+        }
+
+        .refresh-btn {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background: #1d4ed8;
+        }
+
+        .refresh-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 1rem;
+            height: 1rem;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .footer {
+            background: var(--card-bg);
+            border-top: 1px solid var(--border-color);
+            padding: 1.5rem 0;
+            margin-top: 3rem;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.5rem;
+            }
+            
+            .grid-cols-4,
+            .grid-cols-2 {
+                grid-template-columns: 1fr;
+            }
+            
+            .container {
+                padding: 0 0.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div>
+                    <h1>{{projectName}}</h1>
+                    <p>Monitoring Dashboard</p>
+                </div>
+                <div class="status-badge" id="overall-status">
+                    <div class="status-indicator"></div>
+                    <span id="status-text">Loading...</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <div class="container">
+            <!-- Alerts Section -->
+            <div id="alerts-section"></div>
+
+            <!-- Metrics Grid -->
+            <div class="grid grid-cols-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Uptime</h3>
+                    </div>
+                    <div class="metric-value" id="uptime-value">--</div>
+                    <div class="metric-label">seconds</div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Response Time</h3>
+                    </div>
+                    <div class="metric-value" id="response-time-value">--</div>
+                    <div class="metric-label">ms average</div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Error Rate</h3>
+                    </div>
+                    <div class="metric-value" id="error-rate-value">--%</div>
+                    <div class="metric-label">of requests</div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Requests</h3>
+                    </div>
+                    <div class="metric-value" id="request-count-value">--</div>
+                    <div class="metric-label" id="requests-per-second">-- req/s</div>
+                </div>
+            </div>
+
+            <!-- Services and Performance Grid -->
+            <div class="grid grid-cols-2">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Service Health</h3>
+                        <button class="refresh-btn" onclick="refreshData()" id="refresh-btn">
+                            Refresh
+                        </button>
+                    </div>
+                    <ul class="service-list" id="services-list">
+                        <li class="service-item">
+                            <span class="service-name">Loading...</span>
+                            <div class="service-status">
+                                <div class="loading"></div>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Performance Chart</h3>
+                    </div>
+                    <div class="chart-container" id="performance-chart">
+                        <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary);">
+                            <div class="loading" style="margin-right: 0.5rem;"></div>
+                            Loading chart data...
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Configuration Status -->
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Configuration Status</h3>
+                </div>
+                <div id="config-status">
+                    <div style="display: flex; align-items: center; color: var(--text-secondary);">
+                        <div class="loading" style="margin-right: 0.5rem;"></div>
+                        Checking configuration...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>{{projectName}} Health Dashboard • Generated by PurAir Cloudflare Setup Tool</p>
+            <p>Last updated: <span id="last-updated">Never</span></p>
+        </div>
+    </footer>
+
+    <script>
+        // Configuration
+        const CONFIG = {
+            healthEndpoint: '{{healthEndpoint | default "/health/detailed"}}',
+            metricsEndpoint: '{{metricsEndpoint | default "/health/metrics"}}',
+            configEndpoint: '{{configEndpoint | default "/health/config"}}',
+            refreshInterval: {{refreshInterval | default 30000}}, // 30 seconds
+            maxDataPoints: 50
+        };
+
+        // Global state
+        let healthData = null;
+        let refreshTimer = null;
+        let performanceHistory = [];
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshData();
+            startAutoRefresh();
+        });
+
+        /**
+         * Refresh all dashboard data
+         */
+        async function refreshData() {
+            const refreshBtn = document.getElementById('refresh-btn');
+            refreshBtn.disabled = true;
+            refreshBtn.innerHTML = '<div class="loading"></div> Refreshing...';
+
+            try {
+                // Fetch health data
+                const healthResponse = await fetch(CONFIG.healthEndpoint);
+                healthData = await healthResponse.json();
+                
+                updateOverallStatus(healthData);
+                updateMetrics(healthData);
+                updateServices(healthData);
+                updateAlerts(healthData);
+                
+                // Fetch configuration status
+                try {
+                    const configResponse = await fetch(CONFIG.configEndpoint);
+                    const configData = await configResponse.json();
+                    updateConfigStatus(configData);
+                } catch (error) {
+                    console.warn('Could not fetch config status:', error);
+                }
+                
+                // Update performance history
+                if (healthData.performance) {
+                    addPerformanceDataPoint(healthData.performance);
+                    updatePerformanceChart();
+                }
+                
+                document.getElementById('last-updated').textContent = new Date().toLocaleString();
+                
+            } catch (error) {
+                console.error('Failed to refresh data:', error);
+                showError('Failed to load dashboard data');
+            } finally {
+                refreshBtn.disabled = false;
+                refreshBtn.textContent = 'Refresh';
+            }
+        }
+
+        /**
+         * Update overall status badge
+         */
+        function updateOverallStatus(data) {
+            const statusElement = document.getElementById('overall-status');
+            const statusText = document.getElementById('status-text');
+            
+            statusElement.className = 'status-badge';
+            
+            switch (data.status) {
+                case 'healthy':
+                    statusElement.classList.add('status-healthy');
+                    statusText.textContent = 'All Systems Operational';
+                    break;
+                case 'unhealthy':
+                    statusElement.classList.add('status-unhealthy');
+                    statusText.textContent = 'Service Issues Detected';
+                    break;
+                default:
+                    statusElement.classList.add('status-degraded');
+                    statusText.textContent = 'Degraded Performance';
+            }
+        }
+
+        /**
+         * Update metrics display
+         */
+        function updateMetrics(data) {
+            // Uptime
+            const uptime = data.uptime || 0;
+            document.getElementById('uptime-value').textContent = formatUptime(uptime);
+            
+            // Response time
+            const responseTime = data.performance?.averageResponseTime || data.responseTime || 0;
+            document.getElementById('response-time-value').textContent = responseTime;
+            
+            // Error rate
+            const errorRate = data.performance?.errorRate || 0;
+            document.getElementById('error-rate-value').textContent = (errorRate * 100).toFixed(2) + '%';
+            
+            // Request count
+            const requestCount = data.performance?.requestCount || 0;
+            const reqPerSec = data.performance?.requestsPerSecond || 0;
+            document.getElementById('request-count-value').textContent = requestCount.toLocaleString();
+            document.getElementById('requests-per-second').textContent = reqPerSec.toFixed(1) + ' req/s';
+        }
+
+        /**
+         * Update services list
+         */
+        function updateServices(data) {
+            const servicesList = document.getElementById('services-list');
+            servicesList.innerHTML = '';
+            
+            if (!data.services || Object.keys(data.services).length === 0) {
+                servicesList.innerHTML = '<li class="service-item"><span class="service-name">No services configured</span></li>';
+                return;
+            }
+            
+            Object.entries(data.services).forEach(([name, service]) => {
+                const listItem = document.createElement('li');
+                listItem.className = 'service-item';
+                
+                const statusClass = service.status === 'healthy' ? 'healthy' : 
+                                  service.status === 'unhealthy' ? 'unhealthy' : 'degraded';
+                
+                const responseTime = service.responseTime ? ` (${service.responseTime}ms)` : '';
+                
+                listItem.innerHTML = `
+                    <span class="service-name">${name}</span>
+                    <div class="service-status">
+                        <div class="status-dot ${statusClass}"></div>
+                        ${service.status}${responseTime}
+                    </div>
+                `;
+                
+                servicesList.appendChild(listItem);
+            });
+        }
+
+        /**
+         * Update alerts section
+         */
+        function updateAlerts(data) {
+            const alertsSection = document.getElementById('alerts-section');
+            alertsSection.innerHTML = '';
+            
+            const alerts = data.performance?.alerts || [];
+            
+            alerts.forEach(alert => {
+                const alertElement = document.createElement('div');
+                alertElement.className = `alert alert-${alert.severity === 'critical' ? 'error' : 'warning'}`;
+                alertElement.innerHTML = `
+                    <strong>${alert.type.replace('_', ' ').toUpperCase()}</strong>: ${alert.message}
+                `;
+                alertsSection.appendChild(alertElement);
+            });
+        }
+
+        /**
+         * Update configuration status
+         */
+        function updateConfigStatus(data) {
+            const configElement = document.getElementById('config-status');
+            
+            if (data.configuration.valid) {
+                configElement.innerHTML = `
+                    <div style="color: var(--success-color); display: flex; align-items: center;">
+                        <div class="status-dot healthy" style="margin-right: 0.5rem;"></div>
+                        Configuration is valid
+                    </div>
+                `;
+            } else {
+                const issues = data.configuration.issues || [];
+                configElement.innerHTML = `
+                    <div style="color: var(--error-color); display: flex; align-items: center; margin-bottom: 0.5rem;">
+                        <div class="status-dot unhealthy" style="margin-right: 0.5rem;"></div>
+                        Configuration issues detected
+                    </div>
+                    <ul style="margin-left: 1.5rem; color: var(--text-secondary);">
+                        ${issues.map(issue => `<li>${issue.message}</li>`).join('')}
+                    </ul>
+                `;
+            }
+        }
+
+        /**
+         * Add performance data point to history
+         */
+        function addPerformanceDataPoint(performance) {
+            const dataPoint = {
+                timestamp: Date.now(),
+                responseTime: performance.averageResponseTime || 0,
+                errorRate: performance.errorRate || 0,
+                requestCount: performance.requestCount || 0
+            };
+            
+            performanceHistory.push(dataPoint);
+            
+            // Keep only last N data points
+            if (performanceHistory.length > CONFIG.maxDataPoints) {
+                performanceHistory.shift();
+            }
+        }
+
+        /**
+         * Update performance chart (simple implementation)
+         */
+        function updatePerformanceChart() {
+            const chartContainer = document.getElementById('performance-chart');
+            
+            if (performanceHistory.length === 0) {
+                chartContainer.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary);">No data available</div>';
+                return;
+            }
+            
+            // Simple ASCII-style chart
+            const maxResponseTime = Math.max(...performanceHistory.map(p => p.responseTime)) || 1;
+            const chartHeight = 150;
+            
+            let chartHTML = '<div style="font-family: monospace; font-size: 12px; line-height: 1.2;">';
+            chartHTML += `<div style="margin-bottom: 0.5rem; color: var(--text-secondary);">Response Time (ms) - Max: ${maxResponseTime}</div>`;
+            
+            // Create bars
+            for (let i = chartHeight; i > 0; i -= 10) {
+                const threshold = (i / chartHeight) * maxResponseTime;
+                let line = '';
+                
+                performanceHistory.forEach(point => {
+                    const barHeight = (point.responseTime / maxResponseTime) * chartHeight;
+                    line += barHeight >= i ? '█' : ' ';
+                });
+                
+                chartHTML += `<div>${threshold.toFixed(0).padStart(4)}: ${line}</div>`;
+            }
+            
+            chartHTML += '</div>';
+            chartContainer.innerHTML = chartHTML;
+        }
+
+        /**
+         * Start auto-refresh timer
+         */
+        function startAutoRefresh() {
+            if (refreshTimer) {
+                clearInterval(refreshTimer);
+            }
+            
+            refreshTimer = setInterval(refreshData, CONFIG.refreshInterval);
+        }
+
+        /**
+         * Format uptime in human-readable format
+         */
+        function formatUptime(seconds) {
+            if (seconds < 60) return `${seconds}s`;
+            if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+            if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+            return `${Math.floor(seconds / 86400)}d`;
+        }
+
+        /**
+         * Show error message
+         */
+        function showError(message) {
+            const alertsSection = document.getElementById('alerts-section');
+            const errorAlert = document.createElement('div');
+            errorAlert.className = 'alert alert-error';
+            errorAlert.innerHTML = `<strong>ERROR</strong>: ${message}`;
+            alertsSection.appendChild(errorAlert);
+        }
+
+        // Handle visibility change to pause/resume refresh
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'visible') {
+                refreshData();
+                startAutoRefresh();
+            } else {
+                if (refreshTimer) {
+                    clearInterval(refreshTimer);
+                }
+            }
+        });
+    </script>
+</body>
+</html>

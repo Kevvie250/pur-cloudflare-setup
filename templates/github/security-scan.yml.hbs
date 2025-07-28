@@ -1,0 +1,333 @@
+# Security scanning workflow template for PurAir projects
+name: Security Scan
+
+on:
+  push:
+    branches: [{{mainBranch}}]
+  pull_request:
+    branches: [{{mainBranch}}]
+  schedule:
+    # Run security scan daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '{{nodeVersion}}'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit
+        id: npm-audit
+        run: |
+          echo "Running npm audit..."
+          npm audit --audit-level=high --json > audit-results.json || true
+          
+          # Check for high/critical vulnerabilities
+          HIGH_VULNS=$(cat audit-results.json | jq '.metadata.vulnerabilities.high // 0')
+          CRITICAL_VULNS=$(cat audit-results.json | jq '.metadata.vulnerabilities.critical // 0')
+          
+          echo "high-vulnerabilities=$HIGH_VULNS" >> $GITHUB_OUTPUT
+          echo "critical-vulnerabilities=$CRITICAL_VULNS" >> $GITHUB_OUTPUT
+          
+          if [ "$CRITICAL_VULNS" -gt 0 ]; then
+            echo "❌ $CRITICAL_VULNS critical vulnerabilities found"
+            exit 1
+          elif [ "$HIGH_VULNS" -gt 0 ]; then
+            echo "⚠️  $HIGH_VULNS high-severity vulnerabilities found"
+          else
+            echo "✅ No high or critical vulnerabilities found"
+          fi
+
+      - name: Check for secrets in code
+        run: |
+          echo "🔍 Scanning for potential secrets..."
+          
+          # Create patterns file for secret detection
+          cat > secret-patterns.txt << 'EOF'
+          # API Keys and Tokens
+          (api[_-]?key|token|secret)[[:space:]]*[:=][[:space:]]*['""][^'""]{8,}['""]
+          # Passwords
+          password[[:space:]]*[:=][[:space:]]*['""][^'""]{6,}['""]
+          # Private keys
+          -----BEGIN[[:space:]]+(RSA[[:space:]]+)?PRIVATE[[:space:]]+KEY-----
+          # Database URLs
+          (mongodb|mysql|postgres)://[^[:space:]]+
+          # AWS credentials
+          (aws_access_key_id|aws_secret_access_key)[[:space:]]*[:=][[:space:]]*['""][^'""]+['""]
+          # Generic long hex strings (potential keys)
+          ['""][a-fA-F0-9]{32,}['""]
+          EOF
+          
+          # Scan source files
+          SECRETS_FOUND=0
+          while IFS= read -r pattern; do
+            [[ "$pattern" =~ ^[[:space:]]*# ]] && continue  # Skip comments
+            [[ -z "$pattern" ]] && continue  # Skip empty lines
+            
+            if grep -r -E --include="*.js" --include="*.json" --include="*.yml" --include="*.yaml" \
+                --exclude-dir=node_modules --exclude-dir=.git \
+                "$pattern" . > potential-secrets.txt 2>/dev/null; then
+              echo "⚠️  Potential secrets detected:"
+              cat potential-secrets.txt
+              SECRETS_FOUND=1
+            fi
+          done < secret-patterns.txt
+          
+          if [ $SECRETS_FOUND -eq 0 ]; then
+            echo "✅ No potential secrets detected in source code"
+          else
+            echo "❌ Potential secrets found in source code"
+            echo "Please review the findings above and ensure no real secrets are committed"
+            exit 1
+          fi
+
+      - name: Validate environment configurations
+        run: |
+          echo "🔧 Validating environment configurations..."
+          
+          # Check for hardcoded URLs or sensitive configs
+          if grep -r --include="*.js" --include="*.json" \
+            -E "(localhost|127\.0\.0\.1|192\.168\.|10\.0\.|172\.16\.)" \
+            src/ config/ 2>/dev/null | grep -v "// Development only" | head -5; then
+            echo "⚠️  Hardcoded localhost/private IPs found - ensure these are for development only"
+          fi
+          
+          # Validate API endpoint configurations
+          {{#if apiEndpoints}}
+          echo "Validating API endpoint configurations..."
+          {{#each apiEndpoints}}
+          if ! echo "{{this}}" | grep -E "^/api/[a-zA-Z0-9-_/]+$"; then
+            echo "❌ Invalid API endpoint format: {{this}}"
+            exit 1
+          fi
+          {{/each}}
+          {{/if}}
+
+      - name: Check file permissions and structure
+        run: |
+          echo "📁 Checking file permissions and structure..."
+          
+          # Check for overly permissive files
+          find . -type f \( -name "*.sh" -o -name "*.py" \) -not -path "./node_modules/*" -not -path "./.git/*" | while read file; do
+            if [ -x "$file" ]; then
+              echo "✅ Executable file found: $file"
+            fi
+          done
+          
+          # Check for sensitive files that shouldn't be committed
+          SENSITIVE_FILES=(".env" ".env.local" ".env.production" "id_rsa" "id_dsa" "*.pem" "*.key")
+          for pattern in "${SENSITIVE_FILES[@]}"; do
+            if find . -name "$pattern" -not -path "./node_modules/*" -not -path "./.git/*" | grep -q .; then
+              echo "❌ Sensitive file pattern found: $pattern"
+              find . -name "$pattern" -not -path "./node_modules/*" -not -path "./.git/*"
+              exit 1
+            fi
+          done
+          
+          echo "✅ File permission and structure check passed"
+
+      {{#if useSharedWorker}}
+      - name: Validate shared worker configuration
+        run: |
+          echo "🔧 Validating shared worker configuration..."
+          
+          # Check that project key is properly formatted
+          PROJECT_KEY="{{projectKey}}"
+          if ! echo "$PROJECT_KEY" | grep -E "^[A-Z0-9_]+$"; then
+            echo "❌ Invalid project key format: $PROJECT_KEY"
+            exit 1
+          fi
+          
+          # Verify shared worker URL is HTTPS
+          SHARED_WORKER_URL="{{sharedWorkerUrl}}"
+          if ! echo "$SHARED_WORKER_URL" | grep -E "^https://"; then
+            echo "❌ Shared worker URL must use HTTPS: $SHARED_WORKER_URL"
+            exit 1
+          fi
+          
+          echo "✅ Shared worker configuration validated"
+      {{/if}}
+
+      - name: Generate security report
+        if: always()
+        run: |
+          echo "📊 Generating security report..."
+          
+          cat > security-report.md << EOF
+          # Security Scan Report - {{projectName}}
+          
+          **Scan Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          **Commit:** ${{ github.sha }}
+          **Branch:** ${{ github.ref_name }}
+          
+          ## Vulnerability Summary
+          
+          - **Critical:** ${{ steps.npm-audit.outputs.critical-vulnerabilities || 0 }}
+          - **High:** ${{ steps.npm-audit.outputs.high-vulnerabilities || 0 }}
+          
+          ## Scan Results
+          
+          ### NPM Audit
+          $([ -f audit-results.json ] && echo "✅ Completed" || echo "❌ Failed")
+          
+          ### Secret Detection
+          $([ ! -f potential-secrets.txt ] && echo "✅ No secrets detected" || echo "⚠️  Potential secrets found")
+          
+          ### Configuration Validation
+          ✅ Environment configurations validated
+          
+          {{#if useSharedWorker}}
+          ### Shared Worker Configuration
+          ✅ Configuration validated
+          {{/if}}
+          
+          ## Recommendations
+          
+          - Keep dependencies updated
+          - Review any warnings above
+          - Use environment variables for sensitive data
+          - Enable Dependabot for automated security updates
+          
+          ---
+          Generated by PurAir Security Scanner
+          EOF
+
+      - name: Upload security artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-scan-results-${{ github.run_number }}
+          path: |
+            security-report.md
+            audit-results.json
+            potential-secrets.txt
+          retention-days: 30
+
+      - name: Comment on PR (if applicable)
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let report = '## 🔒 Security Scan Results\n\n';
+            
+            // Add vulnerability counts
+            const criticalVulns = '${{ steps.npm-audit.outputs.critical-vulnerabilities }}' || '0';
+            const highVulns = '${{ steps.npm-audit.outputs.high-vulnerabilities }}' || '0';
+            
+            if (criticalVulns === '0' && highVulns === '0') {
+              report += '✅ **No high or critical vulnerabilities detected**\n\n';
+            } else {
+              report += `⚠️  **Vulnerabilities found:** ${criticalVulns} critical, ${highVulns} high\n\n`;
+            }
+            
+            // Add scan status
+            report += '### Scan Status\n';
+            report += '- NPM Audit: ${{ job.status === "success" && "✅ Passed" || "❌ Failed" }}\n';
+            report += '- Secret Detection: ${{ job.status === "success" && "✅ Passed" || "❌ Failed" }}\n';
+            report += '- Configuration: ${{ job.status === "success" && "✅ Passed" || "❌ Failed" }}\n\n';
+            
+            if ('${{ job.status }}' !== 'success') {
+              report += '❌ **Security scan failed.** Please review the workflow logs and fix any issues before merging.\n';
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
+
+  dependency-check:
+    name: Dependency Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '{{nodeVersion}}'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check for outdated packages
+        run: |
+          echo "📦 Checking for outdated packages..."
+          npm outdated --json > outdated-packages.json || true
+          
+          if [ -s outdated-packages.json ] && [ "$(cat outdated-packages.json)" != "{}" ]; then
+            echo "⚠️  Outdated packages found:"
+            npm outdated
+            
+            # Count outdated packages
+            OUTDATED_COUNT=$(cat outdated-packages.json | jq 'keys | length')
+            echo "Total outdated packages: $OUTDATED_COUNT"
+            
+            if [ $OUTDATED_COUNT -gt 10 ]; then
+              echo "❌ Too many outdated packages ($OUTDATED_COUNT > 10)"
+              echo "Consider updating dependencies"
+            fi
+          else
+            echo "✅ All packages are up to date"
+          fi
+
+      - name: Check for unused dependencies
+        run: |
+          echo "🔍 Checking for unused dependencies..."
+          
+          # Install depcheck globally
+          npm install -g depcheck
+          
+          # Run depcheck
+          depcheck --json > unused-deps.json
+          
+          UNUSED_DEPS=$(cat unused-deps.json | jq '.dependencies | length')
+          UNUSED_DEV_DEPS=$(cat unused-deps.json | jq '.devDependencies | length')
+          
+          if [ $UNUSED_DEPS -gt 0 ] || [ $UNUSED_DEV_DEPS -gt 0 ]; then
+            echo "⚠️  Unused dependencies found:"
+            echo "Dependencies: $UNUSED_DEPS"
+            echo "Dev Dependencies: $UNUSED_DEV_DEPS"
+            
+            if [ $UNUSED_DEPS -gt 0 ]; then
+              echo "Unused dependencies:"
+              cat unused-deps.json | jq -r '.dependencies[]'
+            fi
+            
+            if [ $UNUSED_DEV_DEPS -gt 0 ]; then
+              echo "Unused dev dependencies:"
+              cat unused-deps.json | jq -r '.devDependencies[]'
+            fi
+          else
+            echo "✅ No unused dependencies found"
+          fi
+
+      - name: Upload dependency check results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-check-results-${{ github.run_number }}
+          path: |
+            outdated-packages.json
+            unused-deps.json
+          retention-days: 7

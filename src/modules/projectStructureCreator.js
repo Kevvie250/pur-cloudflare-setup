@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { fileGenerator } from './fileGenerator.js';
 import { templateEngine } from './templateEngine.js';
+import { monitoringService } from './monitoring.js';
 import { isValidPath } from '../utils/validation.js';
 
 export class ProjectStructureCreator {
@@ -57,7 +58,8 @@ export class ProjectStructureCreator {
           'src/assets/fonts',
           'public',
           'docs',
-          'tests'
+          'tests',
+          'monitoring'
         ],
         files: [
           { template: 'frontend/index.html.template', path: 'index.html' },
@@ -81,7 +83,8 @@ export class ProjectStructureCreator {
           'src/styles',
           'src/assets',
           'public',
-          'tests'
+          'tests',
+          'monitoring'
         ],
         files: [
           { template: 'frontend/index.html.template', path: 'index.html' },
@@ -104,7 +107,8 @@ export class ProjectStructureCreator {
           'src/styles',
           'src/assets',
           'public',
-          'tests'
+          'tests',
+          'monitoring'
         ],
         files: [
           { template: 'frontend/index.html.template', path: 'index.html' },
@@ -120,7 +124,8 @@ export class ProjectStructureCreator {
         directories: [
           'src',
           'tests',
-          'docs'
+          'docs',
+          'monitoring'
         ],
         files: [
           { template: 'cloudflare/wrangler.toml.template', path: 'wrangler.toml' },
@@ -139,7 +144,8 @@ export class ProjectStructureCreator {
           'src/styles',
           'src/assets',
           'public',
-          'tests'
+          'tests',
+          'monitoring'
         ],
         files: [
           { template: 'cloudflare/pages-function.js.template', path: 'functions/api/[[path]].js' },
@@ -165,7 +171,8 @@ export class ProjectStructureCreator {
           'shared/types',
           'shared/utils',
           'tests',
-          'docs'
+          'docs',
+          'monitoring'
         ],
         files: [
           // Worker files
@@ -599,6 +606,14 @@ export class ProjectStructureCreator {
       );
     }
     
+    // Add monitoring files if enabled
+    if (config.enableMonitoring) {
+      additionalFiles.push(
+        { template: 'monitoring/health-check.js.hbs', path: 'monitoring/health-check.js' },
+        { template: 'monitoring/dashboard.html.hbs', path: 'monitoring/dashboard.html' }
+      );
+    }
+    
     // Add README
     additionalFiles.push({
       template: 'docs/README.md.template',
@@ -647,6 +662,17 @@ export class ProjectStructureCreator {
     if (await fs.pathExists(envExamplePath) && !await fs.pathExists(envPath)) {
       await fs.copy(envExamplePath, envPath);
       console.log(chalk.green('Created .env file from .env.example'));
+    }
+    
+    // Generate monitoring configuration if enabled
+    if (config.enableMonitoring) {
+      try {
+        await monitoringService.generateMonitoringTemplates(config, projectPath);
+        console.log(chalk.green('Monitoring templates generated'));
+      } catch (error) {
+        console.log(chalk.yellow('Warning: Could not generate monitoring templates'));
+        console.log(chalk.gray(error.message));
+      }
     }
     
     // Run tasks
