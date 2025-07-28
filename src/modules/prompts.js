@@ -99,21 +99,46 @@ export class PromptManager {
         prompts.push(
           {
             type: 'confirm',
+            name: 'useSharedWorker',
+            message: 'Use shared PurAir API proxy worker?',
+            default: existingConfig.useSharedWorker !== false,
+            when: () => {
+              console.log(chalk.yellow('\n💡 Recommended: Use the shared worker for all PurAir projects'));
+              return true;
+            }
+          },
+          {
+            type: 'confirm',
             name: 'useWorkers',
             message: 'Use Cloudflare Workers?',
-            default: existingConfig.useWorkers !== false
+            default: existingConfig.useWorkers !== false,
+            when: (answers) => !answers.useSharedWorker
+          },
+          {
+            type: 'list',
+            name: 'apiType',
+            message: 'Which API backend?',
+            choices: [
+              { name: 'Airtable', value: 'airtable' },
+              { name: 'Custom API', value: 'custom' },
+              { name: 'GraphQL', value: 'graphql' },
+              { name: 'REST API', value: 'rest' }
+            ],
+            default: existingConfig.apiType || 'airtable'
           },
           {
             type: 'confirm',
             name: 'useKV',
             message: 'Include KV storage?',
-            default: existingConfig.useKV || false
+            default: existingConfig.useKV || false,
+            when: (answers) => !answers.useSharedWorker
           },
           {
             type: 'confirm',
             name: 'useDurableObjects',
             message: 'Include Durable Objects?',
-            default: existingConfig.useDurableObjects || false
+            default: existingConfig.useDurableObjects || false,
+            when: (answers) => !answers.useSharedWorker
           }
         );
         break;
@@ -203,6 +228,41 @@ export class PromptManager {
       }
     ]);
     return confirmed;
+  }
+
+  async collectSharedWorkerConfig() {
+    console.log(chalk.blue('\nShared Worker Configuration:\n'));
+    
+    return inquirer.prompt([
+      {
+        type: 'input',
+        name: 'sharedWorkerUrl',
+        message: 'Shared worker URL (e.g., api.modernpurairint.com):',
+        default: 'api.modernpurairint.com',
+        validate: (input) => {
+          if (!input) return 'Worker URL is required';
+          return true;
+        }
+      },
+      {
+        type: 'input',
+        name: 'projectKey',
+        message: 'Project key (e.g., ADSPEND, SPRINTER):',
+        validate: (input) => {
+          if (!input) return 'Project key is required';
+          if (!/^[A-Z0-9_]+$/.test(input)) {
+            return 'Project key must be uppercase letters, numbers, and underscores only';
+          }
+          return true;
+        }
+      },
+      {
+        type: 'confirm',
+        name: 'needsWorkerSetup',
+        message: 'Do you need to add this project to the shared worker?',
+        default: true
+      }
+    ]);
   }
 
   async selectFromList(message, choices) {

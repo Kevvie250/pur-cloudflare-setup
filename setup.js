@@ -12,6 +12,7 @@ import { validateProjectName, validateDomain } from './src/utils/validation.js';
 import { projectStructureCreator } from './src/modules/projectStructureCreator.js';
 import { templateEngine } from './src/modules/templateEngine.js';
 import { fileGenerator } from './src/modules/fileGenerator.js';
+import { sharedWorkerManager } from './src/modules/sharedWorkerManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -268,6 +269,13 @@ class CloudflareSetupCLI {
     console.log(chalk.blue('\n🔨 Generating project...\n'));
     
     try {
+      // Check if using shared worker
+      if (config.useSharedWorker && sharedWorkerManager.canUseSharedWorker(config)) {
+        // Collect shared worker configuration
+        const sharedConfig = await this.promptManager.collectSharedWorkerConfig();
+        config = { ...config, ...sharedConfig };
+      }
+      
       // Determine project path
       const projectPath = path.resolve(config.projectPath || config.projectName);
       
@@ -277,6 +285,11 @@ class CloudflareSetupCLI {
       console.log(chalk.green('\n✅ Project generated successfully!\n'));
       console.log(chalk.white('📁 Project location:'), chalk.cyan(projectPath));
       console.log(chalk.white('📄 Files created:'), chalk.cyan(result.filesGenerated));
+      
+      // Handle shared worker registration
+      if (config.useSharedWorker && config.needsWorkerSetup) {
+        await this.handleSharedWorkerSetup(config, projectPath);
+      }
       
       // Show next steps
       this.showNextSteps(projectPath, config);
@@ -292,6 +305,28 @@ class CloudflareSetupCLI {
       this.spinner.fail('Failed to generate project');
       throw error;
     }
+  }
+
+  async handleSharedWorkerSetup(config, projectPath) {
+    console.log(chalk.blue('\n🔗 Shared Worker Setup\n'));
+    
+    // Generate registration instructions
+    const instructions = sharedWorkerManager.generateRegistrationInstructions(config);
+    sharedWorkerManager.displayRegistrationInstructions(instructions);
+    
+    // Generate registration script
+    const scriptPath = path.join(projectPath, 'register-with-shared-worker.sh');
+    const script = sharedWorkerManager.generateRegistrationScript(config);
+    await fileGenerator.generateFile(scriptPath, script);
+    
+    // Generate checklist
+    const checklistPath = path.join(projectPath, 'docs', 'shared-worker-checklist.md');
+    const checklist = sharedWorkerManager.generateChecklist(config);
+    await fileGenerator.generateFile(checklistPath, checklist);
+    
+    console.log(chalk.green('\n✅ Generated shared worker setup files:'));
+    console.log(chalk.gray(`  - ${path.basename(scriptPath)} - Registration script`));
+    console.log(chalk.gray(`  - docs/shared-worker-checklist.md - Setup checklist`));
   }
 
   showNextSteps(projectPath, config) {

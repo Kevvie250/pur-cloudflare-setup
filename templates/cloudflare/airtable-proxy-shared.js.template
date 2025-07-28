@@ -1,0 +1,316 @@
+/**
+ * Shared Cloudflare Worker - Multi-Project Airtable API Proxy
+ * 
+ * This worker handles API requests for multiple PurAir projects,
+ * routing to the correct Airtable base based on the requesting domain.
+ * 
+ * Environment variables per project:
+ * - AIRTABLE_TOKEN_[PROJECT_KEY]: Personal access token
+ * - AIRTABLE_BASE_ID_[PROJECT_KEY]: Base ID for the project
+ * 
+ * Project detection: Based on subdomain or custom header
+ */
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    
+    // Simple health check endpoint
+    if (url.pathname === '/health') {
+      return new Response('OK', {
+        headers: { 'Content-Type': 'text/plain' }
+      });
+    }
+    
+    // Debug endpoint (only in development)
+    if (url.pathname === '/api/debug' && env.ENVIRONMENT !== 'production') {
+      const projects = this.getConfiguredProjects(env);
+      return new Response(JSON.stringify({
+        configuredProjects: projects,
+        requestOrigin: request.headers.get('Origin') || 'No origin header',
+        requestHost: request.headers.get('Host') || url.host
+      }, null, 2), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
+    // Handle CORS preflight requests
+    if (request.method === 'OPTIONS') {
+      return this.handleCORS(request, env);
+    }
+
+    // Get origin for CORS handling
+    const origin = request.headers.get('Origin');
+    
+    // Detect which project is making the request
+    const project = await this.detectProject(request, env);
+    
+    if (!project) {
+      return new Response('Unable to determine project', {
+        status: 400,
+        headers: this.getCORSHeaders(origin, env)
+      });
+    }
+
+    // Get project-specific configuration
+    const projectConfig = this.getProjectConfig(project, env);
+    
+    if (!projectConfig.token || !projectConfig.baseId) {
+      console.error(`Missing configuration for project: ${project.key}`);
+      return new Response('Project not configured', {
+        status: 500,
+        headers: this.getCORSHeaders(origin, env)
+      });
+    }
+
+    // Only handle Airtable API routes
+    if (!url.pathname.startsWith('/api/airtable/')) {
+      return new Response('Not Found', {
+        status: 404,
+        headers: this.getCORSHeaders(origin, env)
+      });
+    }
+
+    // Extract the Airtable path
+    const airtablePath = url.pathname.replace('/api/airtable/', '');
+    
+    // Build the Airtable API URL
+    const airtableUrl = `https://api.airtable.com/v0/${projectConfig.baseId}/${airtablePath}${url.search}`;
+    
+    console.log(`Proxying request for ${project.name} to: ${airtableUrl}`);
+
+    try {
+      // Prepare headers for Airtable
+      const headers = new Headers({
+        'Authorization': `Bearer ${projectConfig.token}`,
+        'Content-Type': 'application/json',
+      });
+
+      // Make the request to Airtable
+      const response = await fetch(airtableUrl, {
+        method: request.method,
+        headers: headers,
+        body: request.method !== 'GET' && request.method !== 'HEAD' 
+          ? await request.text() 
+          : undefined,
+      });
+
+      // Log response status
+      console.log(`Airtable response status: ${response.status}`);
+
+      // Create response headers
+      const responseHeaders = new Headers(response.headers);
+      
+      // Add CORS headers
+      const corsHeaders = this.getCORSHeaders(origin, env);
+      Object.entries(corsHeaders).forEach(([key, value]) => {
+        responseHeaders.set(key, value);
+      });
+
+      // Add project identifier to response
+      responseHeaders.set('X-PurAir-Project', project.key);
+
+      // Return the response
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+      });
+    } catch (error) {
+      console.error('Airtable proxy error:', error);
+      return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getCORSHeaders(origin, env)
+        }
+      });
+    }
+  },
+
+  /**
+   * Detect which project is making the request
+   */
+  async detectProject(request, env) {
+    const url = new URL(request.url);
+    const origin = request.headers.get('Origin') || '';
+    const host = request.headers.get('Host') || url.host;
+    
+    // Check for explicit project header (highest priority)
+    const projectHeader = request.headers.get('X-PurAir-Project');
+    if (projectHeader) {
+      const projectKey = projectHeader.toUpperCase().replace(/-/g, '_');
+      return {
+        key: projectKey,
+        name: projectHeader,
+        source: 'header'
+      };
+    }
+
+    // Project configuration mapping
+    const projectMappings = {
+      // Subdomain-based detection
+      'adspend.modernpurairint.com': { key: 'ADSPEND', name: 'adspend' },
+      'sprinter.modernpurairint.com': { key: 'SPRINTER', name: 'sprinter' },
+      'dashboard.modernpurairint.com': { key: 'DASHBOARD', name: 'dashboard' },
+      
+      // Legacy domains
+      'pur-adspend-dash.pages.dev': { key: 'ADSPEND', name: 'adspend' },
+      
+      // Add more project mappings here
+      {{#each additionalProjects}}
+      '{{this.domain}}': { key: '{{uppercase this.key}}', name: '{{this.name}}' },
+      {{/each}}
+    };
+
+    // Check origin first
+    for (const [domain, config] of Object.entries(projectMappings)) {
+      if (origin.includes(domain)) {
+        return { ...config, source: 'origin' };
+      }
+    }
+
+    // Check host header
+    for (const [domain, config] of Object.entries(projectMappings)) {
+      if (host.includes(domain)) {
+        return { ...config, source: 'host' };
+      }
+    }
+
+    // Try to extract from subdomain pattern
+    const subdomainMatch = host.match(/^([a-z0-9-]+)\./);
+    if (subdomainMatch) {
+      const subdomain = subdomainMatch[1];
+      const projectKey = subdomain.toUpperCase().replace(/-/g, '_');
+      
+      // Check if this project has configuration
+      if (env[`AIRTABLE_TOKEN_${projectKey}`]) {
+        return {
+          key: projectKey,
+          name: subdomain,
+          source: 'subdomain'
+        };
+      }
+    }
+
+    // Default fallback (if configured)
+    if (env.DEFAULT_PROJECT) {
+      return {
+        key: env.DEFAULT_PROJECT,
+        name: env.DEFAULT_PROJECT.toLowerCase(),
+        source: 'default'
+      };
+    }
+
+    return null;
+  },
+
+  /**
+   * Get project-specific configuration
+   */
+  getProjectConfig(project, env) {
+    return {
+      token: env[`AIRTABLE_TOKEN_${project.key}`],
+      baseId: env[`AIRTABLE_BASE_ID_${project.key}`],
+      name: project.name
+    };
+  },
+
+  /**
+   * Get list of configured projects
+   */
+  getConfiguredProjects(env) {
+    const projects = [];
+    const envKeys = Object.keys(env);
+    
+    // Find all AIRTABLE_TOKEN_* keys
+    const tokenKeys = envKeys.filter(key => key.startsWith('AIRTABLE_TOKEN_'));
+    
+    for (const tokenKey of tokenKeys) {
+      const projectKey = tokenKey.replace('AIRTABLE_TOKEN_', '');
+      const baseIdKey = `AIRTABLE_BASE_ID_${projectKey}`;
+      
+      if (env[baseIdKey]) {
+        projects.push({
+          key: projectKey,
+          name: projectKey.toLowerCase().replace(/_/g, '-'),
+          hasToken: true,
+          hasBaseId: true
+        });
+      }
+    }
+    
+    return projects;
+  },
+
+  /**
+   * Get CORS headers based on origin
+   */
+  getCORSHeaders(origin, env) {
+    const allowedOrigins = (env.ALLOWED_ORIGINS || '').split(',').map(o => o.trim());
+    
+    // In production, validate origin
+    if (env.ENVIRONMENT === 'production' && origin) {
+      const isAllowed = allowedOrigins.some(allowed => {
+        if (allowed === '*') return true;
+        if (allowed === origin) return true;
+        // Support wildcard subdomains
+        if (allowed.startsWith('*.')) {
+          const domain = allowed.substring(2);
+          return origin.endsWith(domain);
+        }
+        return false;
+      });
+
+      if (isAllowed) {
+        return {
+          'Access-Control-Allow-Origin': origin,
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-PurAir-Project',
+          'Access-Control-Allow-Credentials': 'true',
+          'Access-Control-Max-Age': '86400',
+        };
+      }
+    }
+
+    // Development or no origin validation
+    return {
+      'Access-Control-Allow-Origin': origin || '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-PurAir-Project',
+      'Access-Control-Max-Age': '86400',
+    };
+  },
+
+  /**
+   * Handle CORS preflight requests
+   */
+  handleCORS(request, env) {
+    const origin = request.headers.get('Origin');
+    return new Response(null, {
+      status: 204,
+      headers: this.getCORSHeaders(origin, env)
+    });
+  }
+};
+
+// Optional: Export configuration for wrangler
+export const config = {
+  // Rate limiting configuration
+  rateLimit: {
+    // 100 requests per minute per IP
+    requestsPerMinute: {{workerRateLimit}},
+  },
+  
+  // Cache configuration
+  cache: {
+    // Cache successful GET requests for 60 seconds
+    ttl: 60,
+    // Only cache successful responses
+    statusCodes: [200, 304]
+  }
+};

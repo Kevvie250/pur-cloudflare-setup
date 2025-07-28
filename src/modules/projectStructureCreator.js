@@ -265,6 +265,9 @@ export class ProjectStructureCreator {
       
       // API config
       apiType: config.apiType || 'custom',
+      useSharedWorker: config.useSharedWorker || false,
+      sharedWorkerUrl: config.sharedWorkerUrl || 'api.modernpurairint.com',
+      projectKey: config.projectKey || config.projectName.toUpperCase().replace(/-/g, '_'),
       apiBaseUrl: config.apiBaseUrl || '/api',
       apiTimeout: config.apiTimeout || 30000,
       

@@ -1,0 +1,95 @@
+name = "purair-api-proxy"
+main = "airtable-proxy-shared.js"
+compatibility_date = "2024-01-01"
+
+# Enable logging in Cloudflare
+[observability.logs]
+enabled = true
+
+# Production environment configuration
+[env.production]
+name = "purair-api-proxy-production"
+
+# Environment variables for allowed origins
+# Supports wildcards for subdomains: *.modernpurairint.com
+[env.production.vars]
+ALLOWED_ORIGINS = "*.modernpurairint.com,*.purair.com,https://modernpurairint.com,https://www.modernpurairint.com"
+ENVIRONMENT = "production"
+DEFAULT_PROJECT = ""  # Leave empty to require explicit project detection
+
+# Custom domain routes for the shared API
+routes = [
+  { pattern = "api.modernpurairint.com/*", zone_name = "modernpurairint.com" },
+  { pattern = "api.purair.com/*", zone_name = "purair.com" }
+]
+
+# Rate limiting (Enterprise feature, optional)
+# [[env.production.rate_limiting]]
+# threshold = 100
+# period = 60
+# action = "log"
+
+# Staging environment for testing new projects
+[env.staging]
+name = "purair-api-proxy-staging"
+
+[env.staging.vars]
+ALLOWED_ORIGINS = "*"  # More permissive for testing
+ENVIRONMENT = "staging"
+DEFAULT_PROJECT = ""
+
+# Development environment
+[env.development]
+name = "purair-api-proxy-dev"
+
+[env.development.vars]
+ALLOWED_ORIGINS = "*"
+ENVIRONMENT = "development"
+DEFAULT_PROJECT = "ADSPEND"  # Default project for local testing
+
+# Secrets to be set via wrangler secret put or Cloudflare dashboard:
+# 
+# Project: ADSPEND
+# - AIRTABLE_TOKEN_ADSPEND
+# - AIRTABLE_BASE_ID_ADSPEND
+#
+# Project: SPRINTER
+# - AIRTABLE_TOKEN_SPRINTER
+# - AIRTABLE_BASE_ID_SPRINTER
+#
+# Project: DASHBOARD
+# - AIRTABLE_TOKEN_DASHBOARD
+# - AIRTABLE_BASE_ID_DASHBOARD
+#
+# Add more projects as needed following the pattern:
+# - AIRTABLE_TOKEN_[PROJECT_KEY]
+# - AIRTABLE_BASE_ID_[PROJECT_KEY]
+#
+# Where PROJECT_KEY is uppercase with underscores (e.g., MY_NEW_PROJECT)
+
+# Optional: KV namespace for caching (requires setup)
+# [[kv_namespaces]]
+# binding = "CACHE"
+# id = "your-kv-namespace-id"
+
+# Optional: Durable Objects for rate limiting per client
+# [[durable_objects.bindings]]
+# name = "RATE_LIMITER"
+# class_name = "RateLimiter"
+
+# Optional: Analytics Engine for detailed metrics
+# [[analytics_engine_datasets]]
+# binding = "ANALYTICS"
+
+# Build configuration
+[build]
+command = "npm install"
+
+# Optimization settings
+[limits]
+cpu_ms = 10  # Limit CPU time per request
+memory_mb = 128  # Memory limit
+
+# Optional: Tail Workers for async logging
+# [tail_consumers]
+# - { service = "purair-logger" }
